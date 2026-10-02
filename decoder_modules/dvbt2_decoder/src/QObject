@@ -1,0 +1,6 @@
+#pragma once
+class QObject {};
+#define Q_OBJECT
+#define signals public
+#define slots
+#define emit

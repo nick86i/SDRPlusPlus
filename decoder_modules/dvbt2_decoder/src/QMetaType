@@ -1,0 +1,8 @@
+#pragma once
+#ifndef SDRPP_QREGISTERMETATYPE_STUB
+#define SDRPP_QREGISTERMETATYPE_STUB
+template <typename T> inline void qRegisterMetaType() {}
+#endif
+#ifndef Q_DECLARE_METATYPE
+#define Q_DECLARE_METATYPE(Type)
+#endif

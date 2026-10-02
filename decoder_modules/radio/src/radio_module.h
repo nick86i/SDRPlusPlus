@@ -8,6 +8,7 @@
 #include <dsp/chain.h>
 #include <dsp/noise_reduction/noise_blanker.h>
 #include <dsp/noise_reduction/fm_if.h>
+#include <dsp/noise_reduction/adaptive_spectral_audio.h>
 #include <dsp/noise_reduction/squelch.h>
 #include <dsp/multirate/rational_resampler.h>
 #include <dsp/filter/deephasis.h>
@@ -83,9 +84,11 @@ public:
 
         resamp.init(NULL, 250000.0, 48000.0);
         deemp.init(NULL, 50e-6, 48000.0);
+        adaptiveNR.init(NULL, ifnrStrength, ifnrProfile);
 
         afChain.addBlock(&resamp, true);
         afChain.addBlock(&deemp, false);
+        afChain.addBlock(&adaptiveNR, false);
 
         // Initialize the sink
         srChangeHandler.ctx = this;
@@ -134,10 +137,12 @@ public:
         ifChain.start();
         selectDemodByID((DemodID)selectedDemodID);
         afChain.start();
+        stream.start();
     }
 
     void disable() {
         enabled = false;
+        stream.stop();
         ifChain.stop();
         if (selectedDemod) { selectedDemod->stop(); }
         afChain.stop();
@@ -160,6 +165,9 @@ public:
         RADIO_DEMOD_CW,
         RADIO_DEMOD_LSB,
         RADIO_DEMOD_RAW,
+        RADIO_DEMOD_DRM,
+        RADIO_DEMOD_MORSE,
+        RADIO_DEMOD_DMR,
         _RADIO_DEMOD_COUNT,
     };
 
@@ -173,55 +181,81 @@ private:
         ImGui::BeginGroup();
 
         ImGui::Columns(4, CONCAT("RadioModeColumns##_", _this->name), false);
-        if (ImGui::RadioButton(CONCAT("NFM##_", _this->name), _this->selectedDemodID == 0) && _this->selectedDemodID != 0) {
-            _this->selectDemodByID(RADIO_DEMOD_NFM);
-        }
-        if (ImGui::RadioButton(CONCAT("WFM##_", _this->name), _this->selectedDemodID == 1) && _this->selectedDemodID != 1) {
-            _this->selectDemodByID(RADIO_DEMOD_WFM);
-        }
-        ImGui::NextColumn();
-        if (ImGui::RadioButton(CONCAT("AM##_", _this->name), _this->selectedDemodID == 2) && _this->selectedDemodID != 2) {
+        if (ImGui::RadioButton(CONCAT("AM##_", _this->name), _this->selectedDemodID == RADIO_DEMOD_AM) && _this->selectedDemodID != RADIO_DEMOD_AM) {
             _this->selectDemodByID(RADIO_DEMOD_AM);
         }
-        if (ImGui::RadioButton(CONCAT("DSB##_", _this->name), _this->selectedDemodID == 3) && _this->selectedDemodID != 3) {
+        if (ImGui::RadioButton(CONCAT("NFM##_", _this->name), _this->selectedDemodID == RADIO_DEMOD_NFM) && _this->selectedDemodID != RADIO_DEMOD_NFM) {
+            _this->selectDemodByID(RADIO_DEMOD_NFM);
+        }
+        const bool drmAvailable = core::modComManager.interfaceExists("external_decoder.drm");
+        if (!drmAvailable) ImGui::BeginDisabled();
+        if (ImGui::RadioButton(CONCAT("DRM##_", _this->name), _this->selectedDemodID == RADIO_DEMOD_DRM) && _this->selectedDemodID != RADIO_DEMOD_DRM) {
+            _this->selectDemodByID(RADIO_DEMOD_DRM);
+        }
+        if (!drmAvailable) ImGui::EndDisabled();
+        ImGui::NextColumn();
+        if (ImGui::RadioButton(CONCAT("DSB##_", _this->name), _this->selectedDemodID == RADIO_DEMOD_DSB) && _this->selectedDemodID != RADIO_DEMOD_DSB) {
             _this->selectDemodByID(RADIO_DEMOD_DSB);
         }
-        ImGui::NextColumn();
-        if (ImGui::RadioButton(CONCAT("USB##_", _this->name), _this->selectedDemodID == 4) && _this->selectedDemodID != 4) {
-            _this->selectDemodByID(RADIO_DEMOD_USB);
+        if (ImGui::RadioButton(CONCAT("WFM##_", _this->name), _this->selectedDemodID == RADIO_DEMOD_WFM) && _this->selectedDemodID != RADIO_DEMOD_WFM) {
+            _this->selectDemodByID(RADIO_DEMOD_WFM);
         }
-        if (ImGui::RadioButton(CONCAT("CW##_", _this->name), _this->selectedDemodID == 5) && _this->selectedDemodID != 5) {
-            _this->selectDemodByID(RADIO_DEMOD_CW);
-        };
+        const bool dmrAvailable = core::modComManager.interfaceExists("external_decoder.dmr");
+        if (!dmrAvailable) ImGui::BeginDisabled();
+        if (ImGui::RadioButton(CONCAT("DMR##_", _this->name), _this->selectedDemodID == RADIO_DEMOD_DMR) && _this->selectedDemodID != RADIO_DEMOD_DMR) {
+            _this->selectDemodByID(RADIO_DEMOD_DMR);
+        }
+        if (!dmrAvailable) ImGui::EndDisabled();
         ImGui::NextColumn();
-        if (ImGui::RadioButton(CONCAT("LSB##_", _this->name), _this->selectedDemodID == 6) && _this->selectedDemodID != 6) {
+        if (ImGui::RadioButton(CONCAT("LSB##_", _this->name), _this->selectedDemodID == RADIO_DEMOD_LSB) && _this->selectedDemodID != RADIO_DEMOD_LSB) {
             _this->selectDemodByID(RADIO_DEMOD_LSB);
         }
-        if (ImGui::RadioButton(CONCAT("RAW##_", _this->name), _this->selectedDemodID == 7) && _this->selectedDemodID != 7) {
+        if (ImGui::RadioButton(CONCAT("CW##_", _this->name), _this->selectedDemodID == RADIO_DEMOD_CW) && _this->selectedDemodID != RADIO_DEMOD_CW) {
+            _this->selectDemodByID(RADIO_DEMOD_CW);
+        };
+        const bool morseAvailable = core::modComManager.interfaceExists("external_decoder.morse");
+        if (!morseAvailable) ImGui::BeginDisabled();
+        if (ImGui::RadioButton(CONCAT("Morse##_", _this->name), _this->selectedDemodID == RADIO_DEMOD_MORSE) && _this->selectedDemodID != RADIO_DEMOD_MORSE) {
+            _this->selectDemodByID(RADIO_DEMOD_MORSE);
+        }
+        if (!morseAvailable) ImGui::EndDisabled();
+        ImGui::NextColumn();
+        if (ImGui::RadioButton(CONCAT("USB##_", _this->name), _this->selectedDemodID == RADIO_DEMOD_USB) && _this->selectedDemodID != RADIO_DEMOD_USB) {
+            _this->selectDemodByID(RADIO_DEMOD_USB);
+        }
+        if (ImGui::RadioButton(CONCAT("RAW##_", _this->name), _this->selectedDemodID == RADIO_DEMOD_RAW) && _this->selectedDemodID != RADIO_DEMOD_RAW) {
             _this->selectDemodByID(RADIO_DEMOD_RAW);
         };
         ImGui::Columns(1, CONCAT("EndRadioModeColumns##_", _this->name), false);
 
         ImGui::EndGroup();
 
+        auto drawSnapInterval = [&]() {
+            if (ImGui::InputInt(("##_radio_snap_" + _this->name).c_str(), &_this->snapInterval, 1, 100)) {
+                if (_this->snapInterval < 1) { _this->snapInterval = 1; }
+                _this->vfo->setSnapInterval(_this->snapInterval);
+                config.acquire();
+                config.conf[_this->name][_this->selectedDemod->getName()]["snapInterval"] = _this->snapInterval;
+                config.release(true);
+            }
+        };
+
         if (!_this->bandwidthLocked) {
-            ImGui::LeftLabel("Bandwidth");
-            ImGui::SetNextItemWidth(menuWidth - ImGui::GetCursorPosX());
+            ImGui::LeftLabel("BW / Snap");
+            float bwSnapControlWidth = (menuWidth - ImGui::GetCursorPosX() - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+            ImGui::SetNextItemWidth(bwSnapControlWidth);
             if (ImGui::InputFloat(("##_radio_bw_" + _this->name).c_str(), &_this->bandwidth, 1, 100, "%.0f")) {
                 _this->bandwidth = std::clamp<float>(_this->bandwidth, _this->minBandwidth, _this->maxBandwidth);
                 _this->setBandwidth(_this->bandwidth);
             }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            drawSnapInterval();
         }
-
-        // VFO snap interval
-        ImGui::LeftLabel("Snap Interval");
-        ImGui::SetNextItemWidth(menuWidth - ImGui::GetCursorPosX());
-        if (ImGui::InputInt(("##_radio_snap_" + _this->name).c_str(), &_this->snapInterval, 1, 100)) {
-            if (_this->snapInterval < 1) { _this->snapInterval = 1; }
-            _this->vfo->setSnapInterval(_this->snapInterval);
-            config.acquire();
-            config.conf[_this->name][_this->selectedDemod->getName()]["snapInterval"] = _this->snapInterval;
-            config.release(true);
+        else {
+            ImGui::LeftLabel("Snap Interval");
+            ImGui::SetNextItemWidth(menuWidth - ImGui::GetCursorPosX());
+            drawSnapInterval();
         }
 
         // Deemphasis mode
@@ -293,6 +327,24 @@ private:
             case DemodID::RADIO_DEMOD_CW:   demod = new demod::CW(); break;
             case DemodID::RADIO_DEMOD_LSB:  demod = new demod::LSB(); break;
             case DemodID::RADIO_DEMOD_RAW:  demod = new demod::RAW(); break;
+            case DemodID::RADIO_DEMOD_DRM: {
+                auto* external = new demod::External("external_decoder.drm");
+                if (!external->isAvailable()) { delete external; demod = NULL; }
+                else demod = external;
+                break;
+            }
+            case DemodID::RADIO_DEMOD_MORSE: {
+                auto* external = new demod::External("external_decoder.morse");
+                if (!external->isAvailable()) { delete external; demod = NULL; }
+                else demod = external;
+                break;
+            }
+            case DemodID::RADIO_DEMOD_DMR: {
+                auto* external = new demod::External("external_decoder.dmr");
+                if (!external->isAvailable()) { delete external; demod = NULL; }
+                else demod = external;
+                break;
+            }
             default:                        demod = NULL; break;
         }
         if (!demod) { return NULL; }
@@ -337,6 +389,7 @@ private:
     }
 
     void selectDemod(demod::Demodulator* demod) {
+        setAdaptiveNREnabled(false);
         // Stopcurrently selected demodulator and select new
         afChain.setInput(&dummyAudioStream, [=](dsp::stream<dsp::stereo_t>* out){ stream.setInput(out); });
         if (selectedDemod) {
@@ -464,6 +517,9 @@ private:
         if (!selectedDemod) { return; }
         vfo->setBandwidth(bandwidth);
         selectedDemod->setBandwidth(bandwidth);
+        if (adaptiveNREnabled) {
+            adaptiveNR.setToneMode(bandwidth <= 1000.0f);
+        }
 
         config.acquire();
         config.conf[name][selectedDemod->getName()]["bandwidth"] = bandwidth;
@@ -565,17 +621,53 @@ private:
         // Don't save if in broadcast mode
         if (preset == IFNR_PRESET_BROADCAST) {
             if (!selectedDemod) { return; }
-            fmnr.setBins(ifnrTaps[preset]);
+            fmIFNRBins = static_cast<int>(ifnrTaps[preset]);
+            fmnr.setBins(fmIFNRBins);
             return;
         }
 
         fmIFPresetId = ifnrPresets.valueId(preset);
         if (!selectedDemod) { return; }
-        fmnr.setBins(ifnrTaps[preset]);
+        fmIFNRBins = static_cast<int>(ifnrTaps[preset]);
+        fmnr.setBins(fmIFNRBins);
 
         // Save config
         config.acquire();
         config.conf[name][selectedDemod->getName()]["fmifnrPreset"] = ifnrPresets.key(fmIFPresetId);
+        config.release(true);
+    }
+
+    bool isAdaptiveNRMode() const {
+        return selectedDemodID == RADIO_DEMOD_AM || selectedDemodID == RADIO_DEMOD_DSB ||
+               selectedDemodID == RADIO_DEMOD_USB || selectedDemodID == RADIO_DEMOD_LSB;
+    }
+
+    void setAdaptiveNREnabled(bool enabled) {
+        adaptiveNREnabled = enabled && isAdaptiveNRMode();
+        if (!selectedDemod) { return; }
+        adaptiveNR.setToneMode(bandwidth <= 1000.0f);
+        afChain.setBlockEnabled(&adaptiveNR, adaptiveNREnabled, [=](dsp::stream<dsp::stereo_t>* out){ stream.setInput(out); });
+        if (adaptiveNREnabled) adaptiveNR.reset();
+    }
+
+    void setIFNRStrength(int strength) {
+        ifnrStrength = std::clamp(strength, 0, 200);
+        adaptiveNR.setStrength(ifnrStrength);
+        // Preserve the useful range of the original FM reducer while presenting
+        // one consistent 0..100 control to the external module.
+        setIFNRBins(8 + ((ifnrStrength * 112) / 200));
+    }
+
+    void setIFNRProfile(int profile) {
+        ifnrProfile = std::clamp(profile, 0, 6);
+        adaptiveNR.setPreset(ifnrProfile);
+    }
+
+    void setIFNRBins(int bins) {
+        fmIFNRBins = std::clamp(bins, 8, 256);
+        fmnr.setBins(fmIFNRBins);
+        config.acquire();
+        config.conf[name][selectedDemod->getName()]["fmifnrBins"] = fmIFNRBins;
         config.release(true);
     }
 
@@ -635,6 +727,32 @@ private:
             float* _in = (float*)in;
             _this->setSquelchLevel(*_in);
         }
+        else if (code == RADIO_IFACE_CMD_GET_IFNR_ENABLED && out) {
+            *(bool*)out = _this->FMIFNREnabled;
+        }
+        else if (code == RADIO_IFACE_CMD_SET_IFNR_ENABLED && in && _this->enabled) {
+            const bool requested = *(bool*)in;
+            _this->setFMIFNREnabled(requested && _this->FMIFNRAllowed);
+            _this->setAdaptiveNREnabled(requested && _this->isAdaptiveNRMode());
+        }
+        else if (code == RADIO_IFACE_CMD_GET_IFNR_BINS && out) {
+            *(int*)out = _this->fmIFNRBins;
+        }
+        else if (code == RADIO_IFACE_CMD_SET_IFNR_BINS && in && _this->enabled && _this->FMIFNRAllowed) {
+            _this->setIFNRBins(*(int*)in);
+        }
+        else if (code == RADIO_IFACE_CMD_GET_IFNR_STRENGTH && out) {
+            *(int*)out = _this->ifnrStrength;
+        }
+        else if (code == RADIO_IFACE_CMD_SET_IFNR_STRENGTH && in && _this->enabled) {
+            _this->setIFNRStrength(*(int*)in);
+        }
+        else if (code == RADIO_IFACE_CMD_GET_IFNR_PROFILE && out) {
+            *(int*)out = _this->ifnrProfile;
+        }
+        else if (code == RADIO_IFACE_CMD_SET_IFNR_PROFILE && in && _this->enabled) {
+            _this->setIFNRProfile(*(int*)in);
+        }
         else {
             return;
         }
@@ -662,6 +780,7 @@ private:
     dsp::chain<dsp::stereo_t> afChain;
     dsp::multirate::RationalResampler<dsp::stereo_t> resamp;
     dsp::filter::Deemphasis<dsp::stereo_t> deemp;
+    dsp::noise_reduction::AdaptiveSpectralAudio adaptiveNR;
 
     SinkManager::Stream stream;
 
@@ -688,6 +807,10 @@ private:
     bool FMIFNRAllowed;
     bool FMIFNREnabled = false;
     int fmIFPresetId;
+    int fmIFNRBins = 15;
+    bool adaptiveNREnabled = false;
+    int ifnrStrength = 45;
+    int ifnrProfile = 3;
 
     bool notchEnabled = false;
     float notchPos = 0;
