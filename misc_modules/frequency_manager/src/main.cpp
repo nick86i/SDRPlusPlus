@@ -45,10 +45,13 @@ const char* demodModeList[] = {
     "USB",
     "CW",
     "LSB",
-    "RAW"
+    "RAW",
+    "DRM",
+    "Morse",
+    "DMR"
 };
 
-const char* demodModeListTxt = "NFM\0WFM\0AM\0DSB\0USB\0CW\0LSB\0RAW\0";
+const char* demodModeListTxt = "NFM\0WFM\0AM\0DSB\0USB\0CW\0LSB\0RAW\0DRM\0Morse\0DMR\0";
 
 enum {
     BOOKMARK_DISP_MODE_OFF,

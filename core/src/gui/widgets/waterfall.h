@@ -164,6 +164,7 @@ namespace ImGui {
         float selectedVFOSNR = 0.0f;
 
         bool centerFrequencyLocked = false;
+        bool stickyTuning = false;
 
         std::map<std::string, WaterfallVFO*> vfos;
         std::string selectedVFO = "";
@@ -293,6 +294,9 @@ namespace ImGui {
         uint32_t* waterfallFb;
 
         bool draggingFW = false;
+        bool stickyDragActive = false;
+        bool stickyDragMoved = false;
+        double stickyTuneFrequency = 0.0;
         int FFTAreaHeight;
         int newFFTAreaHeight;
 

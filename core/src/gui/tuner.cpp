@@ -131,6 +131,9 @@ namespace tuner {
         case TUNER_MODE_IQ_ONLY:
             iqTuning(freq);
             break;
+        case TUNER_MODE_STICKY:
+            normalTuning(vfoName, freq);
+            break;
         }
     }
 }

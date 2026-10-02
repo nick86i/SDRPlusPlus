@@ -9,6 +9,8 @@
 #include <gui/dialogs/dialog_box.h>
 
 namespace sourcemenu {
+    bool showMore = false;
+
     int sourceId = 0;
     EventHandler<std::string> sourcesChangedHandler;
     EventHandler<std::string> sourceUnregisterHandler;
@@ -301,19 +303,53 @@ namespace sourcemenu {
 
         sigpath::sourceManager.showSelectedMenu();
 
-        if (ImGui::Checkbox("IQ Correction##_sdrpp_iq_corr", &iqCorrection)) {
+        if (sigpath::sourceManager.selectedSourceHasAdvancedMenu()) {
+            ImGui::Checkbox("More##_source_more", &showMore);
+            ImGui::SameLine();
+            sigpath::sourceManager.showSelectedMenuStatus();
+            if (!showMore) {
+                return;
+            }
+            sigpath::sourceManager.showSelectedAdvancedMenu();
+        }
+
+        ImGui::BeginTable("SourceDecIqTable", 4,
+                          ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_NoPadOuterX);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Decimation / IQ Corr / Invert").x);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, lineHeight);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, lineHeight);
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted("Decimation / IQ Corr / Invert");
+
+        ImGui::TableSetColumnIndex(1);
+        if (running) { style::beginDisabled(); }
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::Combo("##source_decim", &decimId, decimations.txt)) {
+            sigpath::iqFrontEnd.setDecimation(decimations.value(decimId));
+            core::configManager.acquire();
+            core::configManager.conf["decimation"] = decimations.key(decimId);
+            core::configManager.release(true);
+        }
+        if (running) { style::endDisabled(); }
+
+        ImGui::TableSetColumnIndex(2);
+        if (ImGui::Checkbox("##_sdrpp_iq_corr", &iqCorrection)) {
             sigpath::iqFrontEnd.setDCBlocking(iqCorrection);
             core::configManager.acquire();
             core::configManager.conf["iqCorrection"] = iqCorrection;
             core::configManager.release(true);
         }
 
-        if (ImGui::Checkbox("Invert IQ##_sdrpp_inv_iq", &invertIQ)) {
+        ImGui::TableSetColumnIndex(3);
+        if (ImGui::Checkbox("##_sdrpp_inv_iq", &invertIQ)) {
             sigpath::iqFrontEnd.setInvertIQ(invertIQ);
             core::configManager.acquire();
             core::configManager.conf["invertIQ"] = invertIQ;
             core::configManager.release(true);
         }
+        ImGui::EndTable();
 
         ImGui::LeftLabel("Offset mode");
         ImGui::SetNextItemWidth(itemWidth - ImGui::GetCursorPosX() - 2.0f*(lineHeight + 1.5f*spacing));
@@ -364,15 +400,5 @@ namespace sourcemenu {
             style::endDisabled();
         }
 
-        if (running) { style::beginDisabled(); }
-        ImGui::LeftLabel("Decimation");
-        ImGui::FillWidth();
-        if (ImGui::Combo("##source_decim", &decimId, decimations.txt)) {
-            sigpath::iqFrontEnd.setDecimation(decimations.value(decimId));
-            core::configManager.acquire();
-            core::configManager.conf["decimation"] = decimations.key(decimId);
-            core::configManager.release(true);
-        }
-        if (running) { style::endDisabled(); }
     }
 }

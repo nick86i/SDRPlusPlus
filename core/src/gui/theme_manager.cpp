@@ -125,12 +125,16 @@ bool ThemeManager::applyTheme(std::string name) {
 
     auto& style = ImGui::GetStyle();
 
-    style.WindowRounding = 0.0f;
-    style.ChildRounding = 0.0f;
-    style.FrameRounding = 0.0f;
-    style.GrabRounding = 0.0f;
-    style.PopupRounding = 0.0f;
-    style.ScrollbarRounding = 0.0f;
+    // A modest global radius gives buttons, inputs, combo boxes, checkboxes,
+    // sliders and their grabs a softer appearance without consuming any more
+    // panel space. Keep containers slightly rounder than individual controls.
+    style.WindowRounding = 6.0f;
+    style.ChildRounding = 5.0f;
+    style.FrameRounding = 4.0f;
+    style.GrabRounding = 4.0f;
+    style.PopupRounding = 6.0f;
+    style.ScrollbarRounding = 6.0f;
+    style.TabRounding = 4.0f;
 
     ImVec4* colors = style.Colors;
     Theme thm = themes[name];

@@ -13,6 +13,7 @@ namespace tuner {
         TUNER_MODE_LOWER_HALF,
         TUNER_MODE_UPPER_HALF,
         TUNER_MODE_IQ_ONLY,
+        TUNER_MODE_STICKY,
         _TUNER_MODE_COUNT
     };
 

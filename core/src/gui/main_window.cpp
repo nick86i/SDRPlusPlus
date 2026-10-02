@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <thread>
 #include <complex>
+#include <cmath>
 #include <gui/widgets/waterfall.h>
 #include <gui/widgets/frequency_select.h>
 #include <signal_path/iq_frontend.h>
@@ -203,8 +204,17 @@ void MainWindow::init() {
     fftHeight = core::configManager.conf["fftHeight"];
     gui::waterfall.setFFTHeight(fftHeight);
 
-    tuningMode = core::configManager.conf["centerTuning"] ? tuner::TUNER_MODE_CENTER : tuner::TUNER_MODE_NORMAL;
+    if (core::configManager.conf.contains("tuningMode") && core::configManager.conf["tuningMode"].is_number_integer()) {
+        tuningMode = core::configManager.conf["tuningMode"];
+        if (tuningMode != tuner::TUNER_MODE_NORMAL && tuningMode != tuner::TUNER_MODE_CENTER && tuningMode != tuner::TUNER_MODE_STICKY) {
+            tuningMode = tuner::TUNER_MODE_NORMAL;
+        }
+    }
+    else {
+        tuningMode = core::configManager.conf["centerTuning"] ? tuner::TUNER_MODE_CENTER : tuner::TUNER_MODE_NORMAL;
+    }
     gui::waterfall.VFOMoveSingleClick = (tuningMode == tuner::TUNER_MODE_CENTER);
+    gui::waterfall.stickyTuning = (tuningMode == tuner::TUNER_MODE_STICKY);
 
     core::configManager.release();
 
@@ -272,7 +282,7 @@ void MainWindow::draw() {
             if (tuningMode == tuner::TUNER_MODE_CENTER) {
                 tuner::tune(tuner::TUNER_MODE_CENTER, gui::waterfall.selectedVFO, gui::waterfall.getCenterFrequency() + vfo->generalOffset);
             }
-            gui::freqSelect.setFrequency(gui::waterfall.getCenterFrequency() + vfo->generalOffset);
+            gui::freqSelect.setFrequency(std::llround(gui::waterfall.getCenterFrequency() + vfo->generalOffset));
             gui::freqSelect.frequencyChanged = false;
             core::configManager.acquire();
             core::configManager.conf["vfoOffsets"][gui::waterfall.selectedVFO] = vfo->generalOffset;
@@ -311,7 +321,7 @@ void MainWindow::draw() {
         gui::waterfall.centerFreqMoved = false;
         sigpath::sourceManager.tune(gui::waterfall.getCenterFrequency());
         if (vfo != NULL) {
-            gui::freqSelect.setFrequency(gui::waterfall.getCenterFrequency() + vfo->generalOffset);
+            gui::freqSelect.setFrequency(std::llround(gui::waterfall.getCenterFrequency() + vfo->generalOffset));
         }
         else {
             gui::freqSelect.setFrequency(gui::waterfall.getCenterFrequency());
@@ -380,28 +390,40 @@ void MainWindow::draw() {
     ImGui::SameLine();
 
     ImGui::SetCursorPosY(origY);
+    ImTextureID tuningIcon = icons::NORMAL_TUNING;
+    const char* tuningTooltip = "Free tuning";
     if (tuningMode == tuner::TUNER_MODE_CENTER) {
-        ImGui::PushID(ImGui::GetID("sdrpp_ena_st_btn"));
-        if (ImGui::ImageButton(icons::CENTER_TUNING, btnSize, ImVec2(0, 0), ImVec2(1, 1), 5, ImVec4(0, 0, 0, 0), textCol)) {
-            tuningMode = tuner::TUNER_MODE_NORMAL;
-            gui::waterfall.VFOMoveSingleClick = false;
-            core::configManager.acquire();
-            core::configManager.conf["centerTuning"] = false;
-            core::configManager.release(true);
-        }
-        ImGui::PopID();
+        tuningIcon = icons::CENTER_TUNING;
+        tuningTooltip = "Center tuning";
     }
-    else { // TODO: Might need to check if there even is a device
-        ImGui::PushID(ImGui::GetID("sdrpp_dis_st_btn"));
-        if (ImGui::ImageButton(icons::NORMAL_TUNING, btnSize, ImVec2(0, 0), ImVec2(1, 1), 5, ImVec4(0, 0, 0, 0), textCol)) {
+    else if (tuningMode == tuner::TUNER_MODE_STICKY) {
+        tuningIcon = icons::STICKY_TUNING;
+        tuningTooltip = "Sticky tuning";
+    }
+
+    ImGui::PushID(ImGui::GetID("sdrpp_tuning_mode_btn"));
+    bool tuningModeClicked = ImGui::ImageButton(tuningIcon, btnSize, ImVec2(0, 0), ImVec2(1, 1), 5, ImVec4(0, 0, 0, 0), textCol);
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", tuningTooltip); }
+    ImGui::PopID();
+
+    if (tuningModeClicked) {
+        if (tuningMode == tuner::TUNER_MODE_NORMAL) {
             tuningMode = tuner::TUNER_MODE_CENTER;
-            gui::waterfall.VFOMoveSingleClick = true;
             tuner::tune(tuner::TUNER_MODE_CENTER, gui::waterfall.selectedVFO, gui::freqSelect.frequency);
-            core::configManager.acquire();
-            core::configManager.conf["centerTuning"] = true;
-            core::configManager.release(true);
         }
-        ImGui::PopID();
+        else if (tuningMode == tuner::TUNER_MODE_CENTER) {
+            tuningMode = tuner::TUNER_MODE_STICKY;
+        }
+        else {
+            tuningMode = tuner::TUNER_MODE_NORMAL;
+        }
+
+        gui::waterfall.VFOMoveSingleClick = (tuningMode == tuner::TUNER_MODE_CENTER);
+        gui::waterfall.stickyTuning = (tuningMode == tuner::TUNER_MODE_STICKY);
+        core::configManager.acquire();
+        core::configManager.conf["tuningMode"] = tuningMode;
+        core::configManager.conf["centerTuning"] = (tuningMode == tuner::TUNER_MODE_CENTER);
+        core::configManager.release(true);
     }
 
     ImGui::SameLine();

@@ -114,6 +114,9 @@ int sdrpp_main(int argc, char* argv[]) {
     defConfig["bandPlanEnabled"] = true;
     defConfig["bandPlanPos"] = 0;
     defConfig["centerTuning"] = false;
+    // -1 tells the UI to migrate the legacy centerTuning boolean. Once the
+    // user selects a mode, this stores the full Free/Center/Sticky mode ID.
+    defConfig["tuningMode"] = -1;
     defConfig["colorMap"] = "Classic";
     defConfig["fftHold"] = false;
     defConfig["fftHoldSpeed"] = 60;

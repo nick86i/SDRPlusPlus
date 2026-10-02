@@ -281,6 +281,18 @@ namespace ImGui {
 
         // Deselect everything if the mouse is released
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            // A click in Sticky mode tunes exactly like Free mode. Only a
+            // gesture that actually moved the spectrum is treated as a pan.
+            if (stickyTuning && stickyDragActive && !stickyDragMoved && selVfo != NULL && (mouseInFFT | mouseInWaterfall)) {
+                int refCenter = mousePos.x - fftAreaMin.x;
+                if (refCenter >= 0 && refCenter < dataWidth) {
+                    double off = ((((double)refCenter / ((double)dataWidth / 2.0)) - 1.0) * (viewBandwidth / 2.0)) + viewOffset;
+                    off += centerFreq;
+                    off = (round(off / selVfo->snapInterval) * selVfo->snapInterval) - centerFreq;
+                    selVfo->setOffset(off);
+                }
+            }
+
             if (fftResizeSelect) {
                 FFTAreaHeight = newFFTAreaHeight;
                 onResize();
@@ -290,6 +302,8 @@ namespace ImGui {
             freqScaleSelect = false;
             vfoSelect = false;
             vfoBorderSelect = false;
+            stickyDragActive = false;
+            stickyDragMoved = false;
             lastDrag = 0;
         }
 
@@ -458,6 +472,65 @@ namespace ImGui {
             if (viewBandwidth != wholeBandwidth) {
                 updateAllVFOs();
                 if (_fullUpdate) { updateWaterfallFb(); };
+            }
+            return;
+        }
+
+        // In sticky tuning mode, drag the spectrum and selected VFO together.
+        // Moving the center frequency by the opposite amount keeps the VFO's
+        // absolute tuned frequency unchanged.
+        if (stickyTuning && ImGui::IsMouseDown(ImGuiMouseButton_Left) && (mouseInFFT | mouseInWaterfall) && !vfoBorderSelect && selVfo != NULL) {
+            if (!stickyDragActive) {
+                stickyTuneFrequency = std::round(centerFreq + selVfo->generalOffset);
+                stickyDragActive = true;
+                stickyDragMoved = false;
+            }
+            double deltax = drag.x - lastDrag;
+            lastDrag = drag.x;
+            double requestedOffsetDelta = deltax * (viewBandwidth / (double)dataWidth);
+
+            // Keep the tuned-frequency marker at least 50 kHz inside the
+            // visible view. Once it reaches that margin, consume the remaining
+            // drag by tuning the receiver while the spectrum keeps moving.
+            constexpr double STICKY_EDGE_MARGIN = 50000.0;
+            const double visibleHalfRange = (std::max)(0.0, (viewBandwidth / 2.0) - STICKY_EDGE_MARGIN);
+            double minGeneralOffset = viewOffset - visibleHalfRange;
+            double maxGeneralOffset = viewOffset + visibleHalfRange;
+
+            // Also keep the complete VFO passband inside the sampled bandwidth.
+            const double referenceOffset = selVfo->generalOffset - selVfo->centerOffset;
+            minGeneralOffset = (std::max)(minGeneralOffset,
+                -(wholeBandwidth / 2.0) + (selVfo->bandwidth / 2.0) + referenceOffset);
+            maxGeneralOffset = (std::min)(maxGeneralOffset,
+                (wholeBandwidth / 2.0) - (selVfo->bandwidth / 2.0) + referenceOffset);
+            if (minGeneralOffset > maxGeneralOffset) {
+                const double collapsedOffset = (minGeneralOffset + maxGeneralOffset) / 2.0;
+                minGeneralOffset = collapsedOffset;
+                maxGeneralOffset = collapsedOffset;
+            }
+
+            const double oldGeneralOffset = selVfo->generalOffset;
+            const double requestedGeneralOffset = oldGeneralOffset + requestedOffsetDelta;
+            const double newGeneralOffset = std::clamp(requestedGeneralOffset, minGeneralOffset, maxGeneralOffset);
+            const double appliedOffsetDelta = newGeneralOffset - oldGeneralOffset;
+            const double edgeTuneDelta = requestedOffsetDelta - appliedOffsetDelta;
+
+            if (requestedOffsetDelta != 0.0) {
+                stickyDragMoved = true;
+                if (appliedOffsetDelta != 0.0) {
+                    selVfo->setCenterOffset(selVfo->centerOffset + appliedOffsetDelta);
+                }
+                if (edgeTuneDelta != 0.0) {
+                    stickyTuneFrequency = std::round(stickyTuneFrequency - edgeTuneDelta);
+                }
+                // Recalculate from the fixed drag anchor instead of repeatedly
+                // adding deltas, which would accumulate floating-point error.
+                centerFreq = stickyTuneFrequency - selVfo->generalOffset;
+                centerFreqMoved = true;
+                lowerFreq = (centerFreq + viewOffset) - (viewBandwidth / 2.0);
+                upperFreq = (centerFreq + viewOffset) + (viewBandwidth / 2.0);
+                updateAllVFOs();
+                if (_fullUpdate) { updateWaterfallFb(); }
             }
             return;
         }
