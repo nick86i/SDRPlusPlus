@@ -9,6 +9,7 @@
 #include <gui/widgets/stepped_slider.h>
 #include <utils/optionlist.h>
 #include <RtAudio.h>
+#include <atomic>
 
 #define CONCAT(a, b) ((std::string(a) + b).c_str())
 
@@ -182,7 +183,7 @@ private:
 
     static void start(void* ctx) {
         AudioSourceModule* _this = (AudioSourceModule*)ctx;
-        if (_this->running) { return; }
+        if (_this->running.load()) { return; }
 
         // If no device is selected, give up
         if (_this->selectedDevice.empty()) { return; }
@@ -196,13 +197,44 @@ private:
         opts.flags = RTAUDIO_MINIMIZE_LATENCY;
         opts.streamName = "SDR++ Audio Source";
 
+        _this->stream.clearWriteStop();
+
         // Open and start stream
         try {
-            _this->audio.openStream(NULL, &parameters, RTAUDIO_FLOAT32, _this->sampleRate, &bufferFrames, callback, _this, &opts);
+#if RTAUDIO_VERSION_MAJOR >= 6
+            const RtAudioErrorType openResult = _this->audio.openStream(
+                NULL, &parameters, RTAUDIO_FLOAT32, _this->sampleRate,
+                &bufferFrames, callback, _this, &opts);
+            if (openResult != RtAudioErrorType::RTAUDIO_NO_ERROR) {
+                flog::error("AudioSourceModule '{}': Could not open '{}' at {} Hz (error {})",
+                            _this->name, _this->selectedDevice, _this->sampleRate, (int)openResult);
+                if (_this->audio.isStreamOpen()) { _this->audio.closeStream(); }
+                return;
+            }
+
+            // RtAudio may invoke the first callback before startStream()
+            // returns. Publish the running state before starting so that the
+            // first buffer is not silently discarded.
+            _this->running.store(true);
+            const RtAudioErrorType startResult = _this->audio.startStream();
+            if (startResult != RtAudioErrorType::RTAUDIO_NO_ERROR) {
+                _this->running.store(false);
+                _this->stream.stopWriter();
+                flog::error("AudioSourceModule '{}': Could not start '{}' (error {})",
+                            _this->name, _this->selectedDevice, (int)startResult);
+                if (_this->audio.isStreamOpen()) { _this->audio.closeStream(); }
+                return;
+            }
+#else
+            _this->audio.openStream(NULL, &parameters, RTAUDIO_FLOAT32, _this->sampleRate,
+                                    &bufferFrames, callback, _this, &opts);
+            _this->running.store(true);
             _this->audio.startStream();
-            _this->running = true;
+#endif
         }
         catch (const std::exception& e) {
+            _this->running.store(false);
+            _this->stream.stopWriter();
             flog::error("Error opening audio device: {}", e.what());
         }
         
@@ -211,11 +243,16 @@ private:
 
     static void stop(void* ctx) {
         AudioSourceModule* _this = (AudioSourceModule*)ctx;
-        if (!_this->running) { return; }
-        _this->running = false;
+        if (!_this->running.exchange(false)) { return; }
+        _this->stream.stopWriter();
         
-        _this->audio.stopStream();
-        _this->audio.closeStream();
+        try {
+            if (_this->audio.isStreamRunning()) { _this->audio.stopStream(); }
+            if (_this->audio.isStreamOpen()) { _this->audio.closeStream(); }
+        }
+        catch (const std::exception& e) {
+            flog::error("Error stopping audio device: {}", e.what());
+        }
 
         flog::info("AudioSourceModule '{0}': Stop!", _this->name);
     }
@@ -227,7 +264,7 @@ private:
     static void menuHandler(void* ctx) {
         AudioSourceModule* _this = (AudioSourceModule*)ctx;
 
-        if (_this->running) { SmGui::BeginDisabled(); }
+        if (_this->running.load()) { SmGui::BeginDisabled(); }
 
         SmGui::FillWidth();
         SmGui::ForceSync();
@@ -259,13 +296,14 @@ private:
             core::setInputSampleRate(_this->sampleRate);
         }
 
-        if (_this->running) { SmGui::EndDisabled(); }
+        if (_this->running.load()) { SmGui::EndDisabled(); }
     }
 
     static int callback(void* outputBuffer, void* inputBuffer, unsigned int nBufferFrames, double streamTime, RtAudioStreamStatus status, void* userData) {
         AudioSourceModule* _this = (AudioSourceModule*)userData;
+        if (!inputBuffer || !_this->running.load()) { return 0; }
         memcpy(_this->stream.writeBuf, inputBuffer, nBufferFrames * sizeof(dsp::complex_t));
-        _this->stream.swap(nBufferFrames);
+        if (!_this->stream.swap(nBufferFrames)) { return 1; }
         return 0;
     }
 
@@ -280,7 +318,11 @@ private:
             flog::warn("AudioSourceModule Warning: {} ({})", errorText, (int)type);
             break;
         default:
-            throw std::runtime_error(errorText);
+            // RtAudio 6 reports errors through this callback from both control
+            // and audio threads. Throwing through either path can terminate the
+            // process, so leave start/stop to handle the returned error code.
+            flog::error("AudioSourceModule Error: {} ({})", errorText, (int)type);
+            break;
         }
     }
 #endif
@@ -290,7 +332,7 @@ private:
     dsp::stream<dsp::complex_t> stream;
     double sampleRate;
     SourceManager::SourceHandler handler;
-    bool running = false;
+    std::atomic<bool> running{false};
     
     OptionList<std::string, DeviceInfo> devices;
     OptionList<double, double> sampleRates;

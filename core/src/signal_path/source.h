@@ -27,9 +27,13 @@ public:
     };
 
     void registerSource(std::string name, SourceHandler* handler);
+    void registerSourceMenuExtensions(std::string name, void (*statusHandler)(void* ctx), void (*advancedHandler)(void* ctx));
     void unregisterSource(std::string name);
     void selectSource(std::string name);
     void showSelectedMenu();
+    void showSelectedMenuStatus();
+    void showSelectedAdvancedMenu();
+    bool selectedSourceHasAdvancedMenu();
     void start();
     void stop();
     void tune(double freq);
@@ -45,7 +49,13 @@ public:
     Event<double> onRetune;
 
 private:
+    struct SourceMenuExtensions {
+        void (*statusHandler)(void* ctx);
+        void (*advancedHandler)(void* ctx);
+    };
+
     std::map<std::string, SourceHandler*> sources;
+    std::map<std::string, SourceMenuExtensions> sourceMenuExtensions;
     std::string selectedName;
     SourceHandler* selectedHandler = NULL;
     double tuneOffset;

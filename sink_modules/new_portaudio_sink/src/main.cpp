@@ -15,6 +15,8 @@
 
 #define BLOCK_SIZE_DIVIDER 60
 #define AUDIO_LATENCY      1.0 / 60.0
+#define DIRECTSOUND_BLOCK_SIZE_DIVIDER 30
+#define DIRECTSOUND_LATENCY 0.100
 
 SDRPP_MOD_INFO{
     /* Name:            */ "new_portaudio_sink",
@@ -76,7 +78,8 @@ public:
         // Get device and samplerate
         AudioDevice_t& dev = devices[deviceNames[devId]];
         double sampleRate = dev.sampleRates[srId];
-        int blockSize = sampleRate / BLOCK_SIZE_DIVIDER;
+        const bool directSound = dev.hostApiInfo->type == paDirectSound;
+        int blockSize = sampleRate / (directSound ? DIRECTSOUND_BLOCK_SIZE_DIVIDER : BLOCK_SIZE_DIVIDER);
 
         // Set the SDR++ stream sample rate
         _stream->setSampleRate(sampleRate);
@@ -220,7 +223,17 @@ private:
             // Zero out output params
             dev.outputParams.device = i;
             dev.outputParams.sampleFormat = paFloat32;
-            dev.outputParams.suggestedLatency = std::min<PaTime>(AUDIO_LATENCY, dev.deviceInfo->defaultLowOutputLatency);
+            if (dev.hostApiInfo->type == paDirectSound) {
+                // DirectSound commonly needs substantially more scheduling headroom
+                // than WASAPI. Too little latency causes repeated starvation that is
+                // heard as chopped or "robotic" audio.
+                dev.outputParams.suggestedLatency = std::max<PaTime>(
+                    DIRECTSOUND_LATENCY, dev.deviceInfo->defaultLowOutputLatency);
+            }
+            else {
+                dev.outputParams.suggestedLatency = std::min<PaTime>(
+                    AUDIO_LATENCY, dev.deviceInfo->defaultLowOutputLatency);
+            }
             dev.outputParams.channelCount = std::min<int>(dev.deviceInfo->maxOutputChannels, 2);
             dev.outputParams.hostApiSpecificStreamInfo = NULL;
 

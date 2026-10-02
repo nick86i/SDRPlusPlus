@@ -16,6 +16,10 @@ void SourceManager::registerSource(std::string name, SourceHandler* handler) {
     onSourceRegistered.emit(name);
 }
 
+void SourceManager::registerSourceMenuExtensions(std::string name, void (*statusHandler)(void* ctx), void (*advancedHandler)(void* ctx)) {
+    sourceMenuExtensions[name] = { statusHandler, advancedHandler };
+}
+
 void SourceManager::unregisterSource(std::string name) {
     if (sources.find(name) == sources.end()) {
         flog::error("Tried to unregister non existent source: {0}", name);
@@ -30,6 +34,7 @@ void SourceManager::unregisterSource(std::string name) {
         selectedHandler = NULL;
     }
     sources.erase(name);
+    sourceMenuExtensions.erase(name);
     onSourceUnregistered.emit(name);
 }
 
@@ -103,4 +108,25 @@ void SourceManager::setTuningMode(TuningMode mode) {
 void SourceManager::setPanadapterIF(double freq) {
     ifFreq = freq;
     tune(currentFreq);
+}
+
+void SourceManager::showSelectedMenuStatus() {
+    auto extensions = sourceMenuExtensions.find(selectedName);
+    if (selectedHandler == NULL || extensions == sourceMenuExtensions.end() || extensions->second.statusHandler == nullptr) {
+        return;
+    }
+    extensions->second.statusHandler(selectedHandler->ctx);
+}
+
+void SourceManager::showSelectedAdvancedMenu() {
+    auto extensions = sourceMenuExtensions.find(selectedName);
+    if (selectedHandler == NULL || extensions == sourceMenuExtensions.end() || extensions->second.advancedHandler == nullptr) {
+        return;
+    }
+    extensions->second.advancedHandler(selectedHandler->ctx);
+}
+
+bool SourceManager::selectedSourceHasAdvancedMenu() {
+    auto extensions = sourceMenuExtensions.find(selectedName);
+    return selectedHandler != NULL && extensions != sourceMenuExtensions.end() && extensions->second.advancedHandler != nullptr;
 }
