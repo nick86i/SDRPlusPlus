@@ -1,0 +1,111 @@
+name: Enhanced Windows CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - sdrpp-enhanced
+  pull_request:
+    branches:
+      - sdrpp-enhanced
+
+permissions:
+  contents: read
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  build_windows:
+    name: Windows x64 enhanced modules
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Create build directory
+        run: cmake -E make_directory "${{ runner.workspace }}/build"
+
+      - name: Download PothosSDR
+        shell: pwsh
+        run: |
+          Invoke-WebRequest `
+            -Uri "https://downloads.myriadrf.org/builds/PothosSDR/PothosSDR-2020.01.26-vc14-x64.exe" `
+            -OutFile "${{ runner.workspace }}/pothos.exe"
+
+      - name: Install PothosSDR libraries
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "C:/Program Files/PothosSDR" | Out-Null
+          7z x "${{ runner.workspace }}/pothos.exe" '-oC:/Program Files/PothosSDR/'
+
+      - name: Install vcpkg dependencies
+        run: >-
+          vcpkg install
+          fftw3:x64-windows
+          glfw3:x64-windows
+          zstd:x64-windows
+          zlib:x64-windows
+          libusb:x64-windows
+          spdlog:x64-windows
+          fdk-aac:x64-windows
+          speexdsp:x64-windows
+
+      - name: Build and install RtAudio
+        shell: pwsh
+        run: |
+          git clone https://github.com/thestk/rtaudio.git
+          git -C rtaudio checkout 2f2fca4502d506abc50f6d4473b2836d24cfb1e3
+          cmake -S rtaudio -B rtaudio/build `
+            -DCMAKE_BUILD_TYPE=Release `
+            "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+          cmake --build rtaudio/build --config Release
+          cmake --install rtaudio/build --config Release
+
+      - name: Configure enhanced build
+        working-directory: ${{ runner.workspace }}/build
+        shell: pwsh
+        run: |
+          cmake "$env:GITHUB_WORKSPACE" `
+            -DCMAKE_BUILD_TYPE="$env:BUILD_TYPE" `
+            -DCOPY_MSVC_REDISTRIBUTABLES=ON `
+            "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
+            -DOPT_BUILD_AIRSPY_SOURCE=OFF `
+            -DOPT_BUILD_AIRSPYHF_SOURCE=OFF `
+            -DOPT_BUILD_HACKRF_SOURCE=OFF `
+            -DOPT_BUILD_RTL_SDR_SOURCE=OFF `
+            -DOPT_BUILD_PLUTOSDR_SOURCE=ON `
+            -DOPT_BUILD_AUDIO_SOURCE=ON `
+            -DOPT_BUILD_AUDIO_SINK=ON `
+            -DOPT_BUILD_DRM_DECODER=ON `
+            -DOPT_BUILD_DMR_DECODER=ON `
+            -DOPT_BUILD_MORSE_DECODER=ON `
+            -DOPT_BUILD_DVBT2_DECODER=ON `
+            -DOPT_BUILD_IF_NOISE_REDUCTION=ON `
+            -DOPT_BUILD_EIBI_FREQUENCY_INFO=ON
+
+      - name: Build enhanced Windows configuration
+        working-directory: ${{ runner.workspace }}/build
+        run: cmake --build . --config Release --parallel 2 --verbose
+
+      - name: Collect CI artifacts
+        if: success()
+        shell: pwsh
+        run: |
+          $artifact = "${{ runner.workspace }}/enhanced-windows-artifact"
+          New-Item -ItemType Directory -Force "$artifact/modules" | Out-Null
+          Copy-Item "${{ runner.workspace }}/build/Release/*" $artifact -Force
+          Get-ChildItem "${{ runner.workspace }}/build" -Recurse -Filter *.dll |
+            Where-Object { $_.FullName -match '\\Release\\' } |
+            ForEach-Object { Copy-Item $_.FullName "$artifact/modules/$($_.Name)" -Force }
+
+      - name: Upload enhanced Windows artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdrpp-enhanced-windows-x64
+          path: ${{ runner.workspace }}/enhanced-windows-artifact
+          if-no-files-found: error
+          retention-days: 14
