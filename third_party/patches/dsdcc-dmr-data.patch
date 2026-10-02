@@ -1,0 +1,483 @@
+diff --git a/dmr.cpp b/dmr.cpp
+index f4cd6b2..4a2e40b 100644
+--- a/dmr.cpp
++++ b/dmr.cpp
+@@ -146,7 +146,9 @@ DSDDMR::DSDDMR(DSDDecoder *dsdDecoder) :
+         m_voice2EmbSig_dibitsIndex(0),
+         m_voice2EmbSig_OK(false),
+         m_voice1FrameCount(DMR_VOX_SUPERFRAME_LEN),
+-        m_voice2FrameCount(DMR_VOX_SUPERFRAME_LEN)
++        m_voice2FrameCount(DMR_VOX_SUPERFRAME_LEN),
++        m_dataHistoryNext(0),
++        m_dataHistoryCount(0)
+ {
+     m_slotText = m_dsdDecoder->m_state.slot0light;
+     w = 0;
+@@ -155,6 +157,16 @@ DSDDMR::DSDDMR(DSDDecoder *dsdDecoder) :
+     z = 0;
+ 
+     memset(m_slotTypePDU_dibits, 0, 10);
++    memset(m_dataBits, 0, sizeof(m_dataBits));
++    m_slot1DataText[0] = '\0';
++    m_slot2DataText[0] = '\0';
++    m_slot1HeaderText[0] = '\0';
++    m_slot2HeaderText[0] = '\0';
++    m_slot1PacketText[0] = '\0';
++    m_slot2PacketText[0] = '\0';
++    memset(m_dataHistory, 0, sizeof(m_dataHistory));
++    memset(&m_slot1Assembly, 0, sizeof(m_slot1Assembly));
++    memset(&m_slot2Assembly, 0, sizeof(m_slot2Assembly));
+     memset(m_cachBits, 0, 24);
+     memset(m_emb_dibits, 0, 8);
+     memset(m_voiceEmbSig_dibits, 0, 16);
+@@ -595,7 +607,9 @@ void DSDDMR::processDataDibit(unsigned char dibit)
+     nextPartOff += IN_DIBITS(DMR_DATA_PART_LEN);
+     if (m_symbolIndex < nextPartOff)
+     {
+-        // TODO
++        const int off = m_symbolIndex - IN_DIBITS(DMR_CACH_LEN);
++        m_dataBits[2*off] = (dibit >> 1) & 1;
++        m_dataBits[2*off + 1] = dibit & 1;
+         return;
+     }
+ 
+@@ -635,9 +649,302 @@ void DSDDMR::processDataDibit(unsigned char dibit)
+     nextPartOff += IN_DIBITS(DMR_DATA_PART_LEN);
+     if (m_symbolIndex < nextPartOff)
+     {
+-        // TODO
++        const int off = m_symbolIndex - IN_DIBITS(DMR_CACH_LEN + DMR_DATA_PART_LEN +
++            DMR_SLOT_TYPE_PART_LEN + DMR_SYNC_LEN + DMR_SLOT_TYPE_PART_LEN);
++        m_dataBits[DMR_DATA_PART_LEN + 2*off] = (dibit >> 1) & 1;
++        m_dataBits[DMR_DATA_PART_LEN + 2*off + 1] = dibit & 1;
++        if (m_symbolIndex == nextPartOff - 1 &&
++            (m_dataType == DSDDMRDataDataHeader || m_dataType == DSDDMRDataRate_1_2_Data))
++            processBPTCData();
++        return;
++    }
++}
++
++void DSDDMR::processBPTCData()
++{
++    // ETSI DMR BPTC(196,96): deinterleave the two 98-bit burst halves and
++    // iteratively repair single-bit row/column errors before extracting data.
++    unsigned char bits[196] = {};
++    for (unsigned int i = 0; i < 196; ++i)
++        bits[i] = m_dataBits[(i * 181U) % 196U];
++
++    static const unsigned char rowSyndromes[15] = {
++        9, 13, 15, 14, 7, 10, 5, 11, 12, 6, 3, 8, 4, 2, 1
++    };
++    static const unsigned char colSyndromes[13] = {
++        15, 14, 7, 10, 5, 11, 12, 6, 3, 8, 4, 2, 1
++    };
++    const auto columnSyndrome = [&bits](int col) {
++        unsigned char c[13];
++        for (int row = 0; row < 13; ++row) c[row] = bits[1 + row*15 + col];
++        return static_cast<unsigned char>(
++            ((c[0]^c[1]^c[3]^c[5]^c[6]^c[9]) << 3) |
++            ((c[0]^c[1]^c[2]^c[4]^c[6]^c[7]^c[10]) << 2) |
++            ((c[0]^c[1]^c[2]^c[3]^c[5]^c[7]^c[8]^c[11]) << 1) |
++            (c[0]^c[2]^c[4]^c[5]^c[8]^c[12]));
++    };
++    const auto rowSyndrome = [&bits](int row) {
++        const unsigned char* r = &bits[1 + row*15];
++        return static_cast<unsigned char>(
++            ((r[0]^r[1]^r[2]^r[3]^r[5]^r[7]^r[8]^r[11]) << 3) |
++            ((r[1]^r[2]^r[3]^r[4]^r[6]^r[8]^r[9]^r[12]) << 2) |
++            ((r[2]^r[3]^r[4]^r[5]^r[7]^r[9]^r[10]^r[13]) << 1) |
++            (r[0]^r[1]^r[2]^r[4]^r[6]^r[7]^r[10]^r[14]));
++    };
++    int corrected = 0;
++    bool uncorrectable = false;
++    for (int pass = 0; pass < 5; ++pass) {
++        bool changed = false;
++        for (int col = 0; col < 15; ++col) {
++            const unsigned char syndrome = columnSyndrome(col);
++            if (syndrome) {
++                bool found = false;
++                for (int row = 0; row < 13; ++row) if (colSyndromes[row] == syndrome) {
++                    bits[1 + row*15 + col] ^= 1; ++corrected; changed = true; found = true; break;
++                }
++                (void)found; // A row pass may still repair this column.
++            }
++        }
++        for (int row = 0; row < 9; ++row) {
++            const unsigned char syndrome = rowSyndrome(row);
++            if (syndrome) {
++                bool found = false;
++                for (int col = 0; col < 15; ++col) if (rowSyndromes[col] == syndrome) {
++                    bits[1 + row*15 + col] ^= 1; ++corrected; changed = true; found = true; break;
++                }
++                (void)found; // A later column pass may still repair this row.
++            }
++        }
++        if (!changed) break;
++    }
++
++    for (int col = 0; col < 15; ++col) uncorrectable |= columnSyndrome(col) != 0;
++    for (int row = 0; row < 9; ++row) uncorrectable |= rowSyndrome(row) != 0;
++
++    char* out = m_dataType == DSDDMRDataDataHeader
++        ? (m_slot == DSDDMRSlot2 ? m_slot2HeaderText : m_slot1HeaderText)
++        : (m_slot == DSDDMRSlot2 ? m_slot2DataText : m_slot1DataText);
++    DataAssembly& assembly = m_slot == DSDDMRSlot2 ? m_slot2Assembly : m_slot1Assembly;
++    char* packetOut = m_slot == DSDDMRSlot2 ? m_slot2PacketText : m_slot1PacketText;
++    const auto formatNetwork = [&assembly](char* text) {
++        text[0] = '\0';
++        if (!assembly.blockValid[0] || !assembly.blockValid[1]) return;
++        const unsigned char* b = assembly.bytes;
++        if ((b[0] >> 4) != 4) return;
++        const int ihl = (b[0] & 0x0F) * 4;
++        if (ihl < 20 || ihl > 60) return;
++        const int totalLength = (b[2] << 8) | b[3];
++        int n = sprintf(text, "\nNetwork: IPv4 %u.%u.%u.%u -> %u.%u.%u.%u, protocol %u, length %d",
++            b[12], b[13], b[14], b[15], b[16], b[17], b[18], b[19], b[9], totalLength);
++        if (b[9] == 17) {
++            const int lastPortByte = ihl + 3;
++            bool portsAvailable = lastPortByte < assembly.expected * 12;
++            for (int block = ihl / 12; portsAvailable && block <= lastPortByte / 12; ++block)
++                portsAvailable = assembly.blockValid[block];
++            if (portsAvailable) {
++                const int sourcePort = (b[ihl] << 8) | b[ihl+1];
++                const int targetPort = (b[ihl+2] << 8) | b[ihl+3];
++                n += sprintf(text+n, ", UDP %d -> %d", sourcePort, targetPort);
++                const int lastLengthByte = ihl + 5;
++                bool lengthAvailable = lastLengthByte < assembly.expected * 12;
++                for (int block = ihl / 12; lengthAvailable && block <= lastLengthByte / 12; ++block)
++                    lengthAvailable = assembly.blockValid[block];
++                if (lengthAvailable) n += sprintf(text+n, ", UDP length %d", (b[ihl+4] << 8) | b[ihl+5]);
++            }
++        }
++        sprintf(text+n, ";");
++    };
++    const auto formatPayload = [&assembly](char* text) {
++        text[0] = '\0';
++        if (!assembly.blockValid[0] || !assembly.blockValid[1]) return;
++        const unsigned char* b = assembly.bytes;
++        if ((b[0] >> 4) != 4 || b[9] != 17) return;
++        const int ihl = (b[0] & 0x0F) * 4;
++        const int available = assembly.expected * 12;
++        const int totalLength = (b[2] << 8) | b[3];
++        const int payloadStart = ihl + 8;
++        if (ihl < 20 || ihl > 60 || payloadStart >= available || totalLength <= payloadStart) return;
++        const int payloadEnd = totalLength < available ? totalLength : available;
++        int n = sprintf(text, "\nPayload: ");
++        for (int pos = payloadStart; pos < payloadEnd && n < 580;) {
++            const int block = pos / 12;
++            if (!assembly.blockValid[block]) {
++                n += sprintf(text+n, "[%d:MISSING]", block + 1);
++                pos = (block + 1) * 12;
++                continue;
++            }
++            const unsigned char c = b[pos++];
++            text[n++] = c >= 32 && c <= 126 ? c : '.';
++        }
++        text[n] = '\0';
++    };
++    const auto countValidBlocks = [&assembly]() {
++        int valid = 0;
++        for (int block = 0; block < assembly.expected; ++block)
++            if (assembly.blockValid[block]) ++valid;
++        return valid;
++    };
++    // A large correction count can converge to a different valid codeword. Do
++    // not present such low-confidence output as decoded user data.
++    if (uncorrectable || corrected > 12) {
++        // A Data Header is also a packet boundary. If it cannot be decoded,
++        // discard any older assembly so following bursts cannot be attached
++        // to the wrong IP packet.
++        if (m_dataType == DSDDMRDataDataHeader) {
++            if (assembly.active) {
++                const int mappedValid = countValidBlocks();
++                sprintf(packetOut, "Packet interrupted by uncorrectable header: %d/%d bursts received, %d valid",
++                    assembly.seen, assembly.expected, mappedValid);
++                assembly.active = false;
++            }
++            sprintf(out, "Header: uncorrectable (%d corrections attempted)", corrected);
++        }
++        else
++            sprintf(out, "D1/2: uncorrectable (%d corrections attempted)", corrected);
++        if (m_dataType == DSDDMRDataRate_1_2_Data && assembly.active && assembly.seen < assembly.expected) {
++            ++assembly.seen;
++            const int mappedValid = countValidBlocks();
++            int n = sprintf(packetOut, "Assembly: %d/%d bursts received, %d valid, %d rejected",
++                assembly.seen, assembly.expected, mappedValid, assembly.seen - mappedValid);
++            char network[192]; formatNetwork(network); n += sprintf(packetOut+n, "%s", network);
++            char application[600]; formatPayload(application); sprintf(packetOut+n, "%s", application);
++            if (assembly.seen == assembly.expected) {
++                const int valid = countValidBlocks();
++                const int expected = assembly.expected;
++                assembly.active = false;
++                int n = sprintf(packetOut, "Packet incomplete: %d/%d valid; map ", valid, expected);
++                for (int i = 0; i < expected && n < 470; ++i)
++                    packetOut[n++] = assembly.blockValid[i] ? 'O' : 'X';
++                char network[192]; formatNetwork(network); n += sprintf(packetOut+n, "%s", network);
++                char application[600]; formatPayload(application); sprintf(packetOut+n, "%s", application);
++            }
++        }
++        return;
++    }
++
++    unsigned char payloadBits[96];
++    int p = 0;
++    for (int i = 4; i <= 11; ++i) payloadBits[p++] = bits[i];
++    for (int row = 1; row < 9; ++row)
++        for (int col = 0; col < 11; ++col) payloadBits[p++] = bits[1 + row*15 + col];
++    unsigned char payload[12] = {};
++    for (int i = 0; i < 96; ++i) payload[i/8] |= payloadBits[i] << (7 - i%8);
++
++    if (m_dataType == DSDDMRDataDataHeader) {
++        unsigned short crc = 0;
++        for (int i = 0; i < 10; ++i) {
++            crc ^= static_cast<unsigned short>(payload[i]) << 8;
++            for (int bit = 0; bit < 8; ++bit)
++                crc = (crc & 0x8000) ? static_cast<unsigned short>((crc << 1) ^ 0x1021) : static_cast<unsigned short>(crc << 1);
++        }
++        crc = static_cast<unsigned short>(~crc);
++        const bool crcOK = ((payload[10] ^ 0xCC) == ((crc >> 8) & 0xFF)) &&
++                           ((payload[11] ^ 0xCC) == (crc & 0xFF));
++        const unsigned char dpf = payload[0] & 0x0F;
++        static const char* dpfNames[16] = {
++            "UDT", "Response", "Unconfirmed", "Confirmed", "DPF 4", "DPF 5", "DPF 6", "DPF 7",
++            "DPF 8", "DPF 9", "DPF 10", "DPF 11", "DPF 12", "Defined short", "Raw/status", "Proprietary"
++        };
++        int blocks = 0;
++        if (dpf == 0) blocks = (payload[8] & 0x03) + 1;
++        else if (dpf == 1 || dpf == 2 || dpf == 3) blocks = payload[8] & 0x7F;
++        else if (dpf == 13 || dpf == 14) blocks = (payload[0] & 0x30) + (payload[1] & 0x0F);
++        const unsigned int target = (payload[2] << 16) | (payload[3] << 8) | payload[4];
++        const unsigned int source = (payload[5] << 16) | (payload[6] << 8) | payload[7];
++        if (!crcOK) {
++            if (assembly.active) {
++                const int mappedValid = countValidBlocks();
++                sprintf(packetOut, "Packet interrupted by invalid header: %d/%d bursts received, %d valid",
++                    assembly.seen, assembly.expected, mappedValid);
++                assembly.active = false;
++            }
++            sprintf(out, "Header: CRC FAIL (%d corrected)", corrected);
++            return;
++        }
++        sprintf(out, "Header: %s, SAP %u, %s %u -> %u, %d block%s, CRC %s (%d corrected)",
++            dpfNames[dpf], (payload[1] >> 4) & 0x0F, (payload[0] & 0x80) ? "group" : "private",
++            source, target, blocks, blocks == 1 ? "" : "s", crcOK ? "OK" : "FAIL", corrected);
++        memset(&assembly, 0, sizeof(assembly));
++        assembly.active = blocks > 0 && blocks <= 127;
++        assembly.dpf = dpf;
++        assembly.source = source;
++        assembly.target = target;
++        assembly.expected = blocks;
++        assembly.padding = (dpf == 2 || dpf == 3) ? ((payload[0] & 0x10) | (payload[1] & 0x0F)) : 0;
++        packetOut[0] = '\0';
+         return;
+     }
++
++    int n = sprintf(out, "D1/2: ");
++    for (int i = 0; i < 12; ++i) n += sprintf(out+n, "%02X%s", payload[i], i == 11 ? "" : " ");
++    n += sprintf(out+n, "  |");
++    for (int i = 0; i < 12; ++i) out[n++] = payload[i] >= 32 && payload[i] <= 126 ? payload[i] : '.';
++    sprintf(out+n, "|  (%d corrected)", corrected);
++
++    if (assembly.active) {
++        sprintf(m_dataHistory[m_dataHistoryNext], "Slot %d block %d/%d (%u -> %u): %s",
++            m_slot == DSDDMRSlot2 ? 2 : 1, assembly.seen + 1, assembly.expected,
++            assembly.source, assembly.target, out);
++    }
++    else {
++        sprintf(m_dataHistory[m_dataHistoryNext], "Slot %d unassociated: %s",
++            m_slot == DSDDMRSlot2 ? 2 : 1, out);
++    }
++    m_dataHistoryNext = (m_dataHistoryNext + 1) % 5;
++    if (m_dataHistoryCount < 5) ++m_dataHistoryCount;
++
++    if (assembly.active && assembly.seen < assembly.expected) {
++        memcpy(&assembly.bytes[assembly.seen * 12], payload, 12);
++        assembly.blockValid[assembly.seen] = true;
++        ++assembly.seen;
++        ++assembly.valid;
++        const int mappedValid = countValidBlocks();
++        n = sprintf(packetOut, "Assembly: %d/%d bursts received, %d valid, %d rejected",
++            assembly.seen, assembly.expected, mappedValid, assembly.seen - mappedValid);
++        { char network[192]; formatNetwork(network); n += sprintf(packetOut+n, "%s", network); }
++        { char application[600]; formatPayload(application); sprintf(packetOut+n, "%s", application); }
++        if (assembly.seen == assembly.expected && mappedValid == assembly.expected) {
++            const int total = assembly.seen * 12;
++            bool crcOK = false;
++            unsigned int calculatedCRC = 0;
++            unsigned int receivedCRC = 0;
++            if (total >= 4) {
++                unsigned int crc = 0;
++                const int dataLength = total - 4;
++                for (int pair = 0; pair < dataLength; pair += 2) {
++                    const int order[2] = { pair + 1 < dataLength ? pair + 1 : pair, pair };
++                    const int count = pair + 1 < dataLength ? 2 : 1;
++                    for (int j = 0; j < count; ++j) {
++                        crc ^= static_cast<unsigned int>(assembly.bytes[order[j]]) << 24;
++                        for (int bit = 0; bit < 8; ++bit)
++                            crc = (crc << 1) ^ ((crc & 0x80000000U) ? 0x04C11DB7U : 0U);
++                    }
++                }
++                calculatedCRC = crc;
++                receivedCRC = static_cast<unsigned int>(assembly.bytes[total-4]) |
++                    (static_cast<unsigned int>(assembly.bytes[total-3]) << 8) |
++                    (static_cast<unsigned int>(assembly.bytes[total-2]) << 16) |
++                    (static_cast<unsigned int>(assembly.bytes[total-1]) << 24);
++                crcOK = calculatedCRC == receivedCRC;
++            }
++            char network[192]; formatNetwork(network);
++            n = sprintf(packetOut, "Packet: %d bytes, %u -> %u, CRC32 %s (%08X/%08X).",
++                total, assembly.source, assembly.target, crcOK ? "OK" : "FAIL", calculatedCRC, receivedCRC);
++            n += sprintf(packetOut+n, "%s", network);
++            char application[600]; formatPayload(application); sprintf(packetOut+n, "%s", application);
++            assembly.active = false;
++        }
++        else if (assembly.seen == assembly.expected) {
++            const int valid = countValidBlocks();
++            const int expected = assembly.expected;
++            assembly.active = false;
++            n = sprintf(packetOut, "Packet incomplete: %d/%d valid; map ", valid, expected);
++            for (int i = 0; i < expected && n < 470; ++i)
++                packetOut[n++] = assembly.blockValid[i] ? 'O' : 'X';
++            char network[192]; formatNetwork(network); n += sprintf(packetOut+n, "%s", network);
++            char application[600]; formatPayload(application); sprintf(packetOut+n, "%s", application);
++        }
++    }
+ }
+ 
+ void DSDDMR::BasicPrivacyXOR(unsigned char *dibit, int index)
+@@ -1002,6 +1309,23 @@ void DSDDMR::processSlotTypePDU()
+         {
+             m_dataType = (DSDDMRDataTYpe) dataType;
+             memcpy(&m_slotText[4], m_slotTypeText[dataType], 3);
++            // Privacy is a voice-call property. Do not carry a flag decoded
++            // during an earlier call into a later idle or packet-data burst.
++            if (m_dataType == DSDDMRDataDataHeader ||
++                m_dataType == DSDDMRDataRate_1_2_Data ||
++                m_dataType == DSDDMRDataRate_3_4_Data ||
++                m_dataType == DSDDMRDataIdle ||
++                m_dataType == DSDDMRDataRate_1 ||
++                m_dataType == DSDDMRDataUnifiedSingleBlock) {
++                if (m_slot == DSDDMRSlot1) m_slot1Addresses.m_privacy = -1;
++                else if (m_slot == DSDDMRSlot2) m_slot2Addresses.m_privacy = -1;
++            }
++            // A Privacy Indicator Header explicitly marks protected voice for
++            // the slot even when its vendor-specific payload is not decoded.
++            if (m_dataType == DSDDMRDataPIHeader) {
++                if (m_slot == DSDDMRSlot1) m_slot1Addresses.m_privacy = 1;
++                else if (m_slot == DSDDMRSlot2) m_slot2Addresses.m_privacy = 1;
++            }
+         }
+ 
+ //        std::cerr << "DSDDMR::processSlotTypePDU OK: CC: " << (int) m_colorCode << " DT: " << dataType << std::endl;
+@@ -1088,6 +1412,9 @@ bool DSDDMR::processVoiceEmbeddedSignalling(int& voiceEmbSig_dibitsIndex,
+                         + (voiceEmbSigRawBits[6] << 1)
+                         + (voiceEmbSigRawBits[7]);
+                 addresses.m_group = (flco == 0);
++                // Full LC bits 16..23 are Service Options. Bit 17 is the
++                // Privacy flag (the 0x40 bit in that octet).
++                addresses.m_privacy = voiceEmbSigRawBits[17] ? 1 : 0;
+                 addresses.m_target = (voiceEmbSigRawBits[16*2 + 2] << 23) // (LC47)
+                         + (voiceEmbSigRawBits[16*2 + 3] << 22)
+                         + (voiceEmbSigRawBits[16*2 + 4] << 21)
+@@ -1188,6 +1515,13 @@ const char *DSDDMR::getSlot1Text() const
+     return m_dsdDecoder->m_state.slot1light;
+ }
+ 
++const char *DSDDMR::getDataHistory(int index) const
++{
++    if (index < 0 || index >= m_dataHistoryCount) return "";
++    const int pos = (m_dataHistoryNext - 1 - index + 5) % 5;
++    return m_dataHistory[pos];
++}
++
+ unsigned char DSDDMR::getColorCode() const
+ {
+     return m_dsdDecoder->m_state.ccnum;
+diff --git a/dmr.h b/dmr.h
+index f0356b0..060333e 100644
+--- a/dmr.h
++++ b/dmr.h
+@@ -108,7 +108,17 @@ public:
+ 
+     const char *getSlot0Text() const;
+     const char *getSlot1Text() const;
++    const char *getSlot0DataText() const { return m_slot1DataText; }
++    const char *getSlot1DataText() const { return m_slot2DataText; }
++    const char *getSlot0HeaderText() const { return m_slot1HeaderText; }
++    const char *getSlot1HeaderText() const { return m_slot2HeaderText; }
++    const char *getSlot0PacketText() const { return m_slot1PacketText; }
++    const char *getSlot1PacketText() const { return m_slot2PacketText; }
++    const char *getDataHistory(int index) const;
+     unsigned char getColorCode() const;
++    int getSlot0Privacy() const { return m_slot1Addresses.m_privacy; }
++    int getSlot1Privacy() const { return m_slot2Addresses.m_privacy; }
++    void resetPrivacy() { m_slot1Addresses.m_privacy = -1; m_slot2Addresses.m_privacy = -1; }
+ 
+ private:
+     struct DMRAddresses
+@@ -116,13 +126,15 @@ private:
+         DMRAddresses() :
+             m_group(false),
+             m_target(0),
+-            m_source(0)
++            m_source(0),
++            m_privacy(-1)
+         {
+         }
+ 
+         bool         m_group;
+         unsigned int m_target;
+         unsigned int m_source;
++        int          m_privacy; //!< -1 unknown, 0 clear, 1 privacy/encrypted
+     };
+ 
+     void processDataFirstHalf(unsigned int shiftBack);  //!< Because sync is in the middle of a frame you need to process the first half first: CACH to end of SYNC
+@@ -133,6 +145,7 @@ private:
+     bool processVoiceEmbeddedSignalling(int& voiceEmbSig_dibitsIndex, unsigned char *voiceEmbSigRawBits, bool& voiceEmbSig_OK, DMRAddresses& addresses);
+     void processVoiceDibit(unsigned char dibit);
+     void processDataDibit(unsigned char dibit);
++    void processBPTCData();
+     void storeSymbolDV(unsigned char *mbeFrame, int dibitindex, unsigned char dibit, bool invertDibit = false);
+     static void textVoiceEmbeddedSignalling(DMRAddresses& addresses, char *slotText);
+ 
+@@ -153,6 +166,28 @@ private:
+     DSDDMRDataTYpe m_dataType;
+     char *m_slotText;
+     unsigned char m_slotTypePDU_dibits[10];
++    unsigned char m_dataBits[196];
++    char m_slot1DataText[80];
++    char m_slot2DataText[80];
++    char m_slot1HeaderText[160];
++    char m_slot2HeaderText[160];
++    char m_slot1PacketText[1024];
++    char m_slot2PacketText[1024];
++    char m_dataHistory[5][160];
++    int m_dataHistoryNext;
++    int m_dataHistoryCount;
++    struct DataAssembly {
++        bool active;
++        unsigned char dpf;
++        unsigned int source;
++        unsigned int target;
++        int expected;
++        int seen;
++        int valid;
++        int padding;
++        bool blockValid[127];
++        unsigned char bytes[12 * 127];
++    } m_slot1Assembly, m_slot2Assembly;
+     unsigned char m_cachBits[24];
+     unsigned char m_emb_dibits[8];
+     unsigned char m_voiceEmbSig_dibits[16];
+diff --git a/dsd_decoder.cpp b/dsd_decoder.cpp
+index 40ae56c..00ac13c 100644
+--- a/dsd_decoder.cpp
++++ b/dsd_decoder.cpp
+@@ -1165,6 +1165,7 @@ void DSDDecoder::printFrameSync(const char *frametype, int offset)
+ void DSDDecoder::noCarrier()
+ {
+     m_dsdSymbol.noCarrier();
++    m_dsdDMR.resetPrivacy();
+ 
+     m_stationType = DSDStationTypeNotApplicable;
+     m_lastSyncType = DSDSyncNone;

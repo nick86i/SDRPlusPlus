@@ -1,4 +1,8 @@
 build/
+build-drm/
+build-*/
+out/
+dist/
 .vscode/
 .vs/
 .idea/
@@ -7,9 +11,19 @@ build/
 *.exe
 *.zip
 *.wav
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.tlog
+*.log
+*.user
+*.pyc
+__pycache__/
 .DS_Store
 root_dev/
 root_dev_srv/
+run-drm-dev.ps1
 Folder.DotSettings.user
 CMakeSettings.json
 poggers_decoder
@@ -17,6 +31,7 @@ m17_decoder/libcorrect
 SDR++.app
 android/deps
 android/app/assets
+/external/sdr_receiver_dvb_t2/
 source_modules/dragonlabs_source
 source_modules/badgesdr_source
 decoder_modules/mystery_decoder

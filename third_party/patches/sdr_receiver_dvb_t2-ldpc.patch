@@ -1,0 +1,202 @@
+diff --git a/src/DVB_T2/LDPC/algorithms.hh b/src/DVB_T2/LDPC/algorithms.hh
+index 5061b0c..d14ff3b 100644
+--- a/src/DVB_T2/LDPC/algorithms.hh
++++ b/src/DVB_T2/LDPC/algorithms.hh
+@@ -124,7 +124,7 @@ struct MinSumAlgorithm<SIMD<int8_t, WIDTH>, UPDATE>
+   }
+   static void finalp(TYPE *links, int cnt)
+   {
+-    TYPE mags[cnt];
++    TYPE mags[32];
+     for (int i = 0; i < cnt; ++i)
+       mags[i] = vqabs(links[i]);
+ 
+@@ -253,7 +253,7 @@ struct OffsetMinSumAlgorithm<SIMD<int8_t, WIDTH>, UPDATE, FACTOR>
+   static void finalp(TYPE *links, int cnt)
+   {
+     auto beta = vunsigned(vdup<TYPE>(std::nearbyint(0.5 * FACTOR)));
+-    TYPE mags[cnt];
++    TYPE mags[32];
+     for (int i = 0; i < cnt; ++i)
+       mags[i] = vsigned(vqsub(vunsigned(vqabs(links[i])), beta));
+ 
+diff --git a/src/DVB_T2/LDPC/avx2.hh b/src/DVB_T2/LDPC/avx2.hh
+index dd827ef..a31e348 100644
+--- a/src/DVB_T2/LDPC/avx2.hh
++++ b/src/DVB_T2/LDPC/avx2.hh
+@@ -128,7 +128,7 @@ inline SIMD<float, 8>
+ vreinterpret(SIMD<uint32_t, 8> a)
+ {
+   SIMD<float, 8> tmp;
+-  tmp.m = (__m256) a.m;
++  tmp.m = _mm256_castsi256_ps(a.m);
+   return tmp;
+ }
+ 
+@@ -137,7 +137,7 @@ inline SIMD<uint32_t, 8>
+ vreinterpret(SIMD<float, 8> a)
+ {
+   SIMD<uint32_t, 8> tmp;
+-  tmp.m = (__m256i) a.m;
++  tmp.m = _mm256_castps_si256(a.m);
+   return tmp;
+ }
+ 
+@@ -146,7 +146,7 @@ inline SIMD<double, 4>
+ vreinterpret(SIMD<uint64_t, 4> a)
+ {
+   SIMD<double, 4> tmp;
+-  tmp.m = (__m256d) a.m;
++  tmp.m = _mm256_castsi256_pd(a.m);
+   return tmp;
+ }
+ 
+@@ -155,7 +155,7 @@ inline SIMD<uint64_t, 4>
+ vreinterpret(SIMD<double, 4> a)
+ {
+   SIMD<uint64_t, 4> tmp;
+-  tmp.m = (__m256i) a.m;
++  tmp.m = _mm256_castpd_si256(a.m);
+   return tmp;
+ }
+ 
+@@ -778,7 +778,7 @@ inline SIMD<uint32_t, 8>
+ vceqz(SIMD<float, 8> a)
+ {
+   SIMD<uint32_t, 8> tmp;
+-  tmp.m = (__m256i) _mm256_cmp_ps(a.m, _mm256_setzero_ps(), _CMP_EQ_OQ);
++  tmp.m = _mm256_castps_si256(_mm256_cmp_ps(a.m, _mm256_setzero_ps(), _CMP_EQ_OQ));
+   return tmp;
+ }
+ 
+@@ -787,7 +787,7 @@ inline SIMD<uint64_t, 4>
+ vceqz(SIMD<double, 4> a)
+ {
+   SIMD<uint64_t, 4> tmp;
+-  tmp.m = (__m256i) _mm256_cmp_pd(a.m, _mm256_setzero_pd(), _CMP_EQ_OQ);
++  tmp.m = _mm256_castpd_si256(_mm256_cmp_pd(a.m, _mm256_setzero_pd(), _CMP_EQ_OQ));
+   return tmp;
+ }
+ 
+@@ -832,7 +832,7 @@ inline SIMD<uint32_t, 8>
+ vceq(SIMD<float, 8> a, SIMD<float, 8> b)
+ {
+   SIMD<uint32_t, 8> tmp;
+-  tmp.m = (__m256i) _mm256_cmp_ps(a.m, b.m, _CMP_EQ_OQ);
++  tmp.m = _mm256_castps_si256(_mm256_cmp_ps(a.m, b.m, _CMP_EQ_OQ));
+   return tmp;
+ }
+ 
+@@ -841,7 +841,7 @@ inline SIMD<uint64_t, 4>
+ vceq(SIMD<double, 4> a, SIMD<double, 4> b)
+ {
+   SIMD<uint64_t, 4> tmp;
+-  tmp.m = (__m256i) _mm256_cmp_pd(a.m, b.m, _CMP_EQ_OQ);
++  tmp.m = _mm256_castpd_si256(_mm256_cmp_pd(a.m, b.m, _CMP_EQ_OQ));
+   return tmp;
+ }
+ 
+@@ -886,7 +886,7 @@ inline SIMD<uint32_t, 8>
+ vcgtz(SIMD<float, 8> a)
+ {
+   SIMD<uint32_t, 8> tmp;
+-  tmp.m = (__m256i) _mm256_cmp_ps(a.m, _mm256_setzero_ps(), _CMP_GT_OQ);
++  tmp.m = _mm256_castps_si256(_mm256_cmp_ps(a.m, _mm256_setzero_ps(), _CMP_GT_OQ));
+   return tmp;
+ }
+ 
+@@ -895,7 +895,7 @@ inline SIMD<uint64_t, 4>
+ vcgtz(SIMD<double, 4> a)
+ {
+   SIMD<uint64_t, 4> tmp;
+-  tmp.m = (__m256i) _mm256_cmp_pd(a.m, _mm256_setzero_pd(), _CMP_GT_OQ);
++  tmp.m = _mm256_castpd_si256(_mm256_cmp_pd(a.m, _mm256_setzero_pd(), _CMP_GT_OQ));
+   return tmp;
+ }
+ 
+@@ -940,7 +940,7 @@ inline SIMD<uint32_t, 8>
+ vcltz(SIMD<float, 8> a)
+ {
+   SIMD<uint32_t, 8> tmp;
+-  tmp.m = (__m256i) _mm256_cmp_ps(a.m, _mm256_setzero_ps(), _CMP_LT_OQ);
++  tmp.m = _mm256_castps_si256(_mm256_cmp_ps(a.m, _mm256_setzero_ps(), _CMP_LT_OQ));
+   return tmp;
+ }
+ 
+@@ -949,7 +949,7 @@ inline SIMD<uint64_t, 4>
+ vcltz(SIMD<double, 4> a)
+ {
+   SIMD<uint64_t, 4> tmp;
+-  tmp.m = (__m256i) _mm256_cmp_pd(a.m, _mm256_setzero_pd(), _CMP_LT_OQ);
++  tmp.m = _mm256_castpd_si256(_mm256_cmp_pd(a.m, _mm256_setzero_pd(), _CMP_LT_OQ));
+   return tmp;
+ }
+ 
+diff --git a/src/DVB_T2/LDPC/layered_decoder.hh b/src/DVB_T2/LDPC/layered_decoder.hh
+index 463932a..f3071b3 100644
+--- a/src/DVB_T2/LDPC/layered_decoder.hh
++++ b/src/DVB_T2/LDPC/layered_decoder.hh
+@@ -87,7 +87,9 @@ class LDPCDecoder
+       int cnt = cnc[i];
+       for (int j = 0; j < M; ++j) {
+         int deg = cnt + 2 - !(i|j);
+-        TYPE inp[deg], out[deg];
++        // DVB LDPC check-node degrees are well below 32. A fixed bound keeps this
++        // reference implementation portable to MSVC, which does not support VLAs.
++        TYPE inp[32], out[32];
+         for (int c = 0; c < cnt; ++c)
+           inp[c] = out[c] = alg.sub(data[pos[CNL*(M*i+j)+c]], bl[c]);
+         inp[cnt] = out[cnt] = alg.sub(parity[M*i+j], bl[cnt]);
+@@ -115,8 +117,8 @@ public:
+   void init(LDPCInterface *it)
+   {
+     if (initialized) {
+-      free(bnl);
+-      free(pty);
++      delete[] bnl;
++      delete[] pty;
+       delete[] cnc;
+       delete[] pos;
+     }
+@@ -132,8 +134,8 @@ public:
+ //    pos = new uint16_t[R * CNL];
+ //    cnc = new uint8_t[R];
+ 
+-    pos = new(std::align_val_t(32))uint16_t[R * CNL];
+-    cnc = new(std::align_val_t(32))uint8_t[R ];
++    pos = new uint16_t[R * CNL];
++    cnc = new uint8_t[R];
+ 
+     for (int i = 0; i < R; ++i)
+       cnc[i] = 0;
+@@ -152,8 +154,8 @@ public:
+ //    bnl = reinterpret_cast<TYPE *>(aligned_alloc(sizeof(TYPE), sizeof(TYPE) * LT));
+ //    pty = reinterpret_cast<TYPE *>(aligned_alloc(sizeof(TYPE), sizeof(TYPE) * R));
+ 
+-    bnl = new(std::align_val_t(sizeof(TYPE))) TYPE[sizeof(TYPE) * LT];
+-    pty = new(std::align_val_t(sizeof(TYPE))) TYPE[sizeof(TYPE) * R];
++    bnl = new TYPE[LT];
++    pty = new TYPE[R];
+ 
+ 
+     uint16_t *tmp = new uint16_t[R * CNL];
+@@ -162,7 +164,7 @@ public:
+         for (int c = 0; c < CNL; ++c)
+           tmp[CNL*(M*i+j)+c] = pos[CNL*(q*j+i)+c];
+     // delete[] pos;
+-    operator delete[] (pos, std::align_val_t(32));
++    delete[] pos;
+     pos = tmp;
+   }
+   int operator()(TYPE *data, TYPE *parity, int trials = 25, int blocks = 1)
+@@ -181,8 +183,8 @@ public:
+   ~LDPCDecoder()
+   {
+     if (initialized) {
+-      free(bnl);
+-      free(pty);
++      delete[] bnl;
++      delete[] pty;
+       delete[] cnc;
+       delete[] pos;
+     }

@@ -1,3 +1,27 @@
+# SDR++ Decoder and Pluto+ Development Fork
+
+This repository is an experimental SDR++ development fork focused on improved
+Pluto/Pluto+ reception and additional digital-signal decoders. It is based on
+the official SDR++ project and retains its Git history so upstream changes can
+be reviewed and merged.
+
+Major additions currently include:
+
+- an enhanced PlutoSDR/Pluto+ source with diagnostics, overflow handling,
+  receive-buffer controls, gain fixes, decimation, and startup improvements;
+- DRM30 decoding with audio, service information, text, and MOT slideshow data;
+- DMR Tier II decoding with voice support and expanded data-packet diagnostics;
+- DVB-T2, Morse, and wide-shift FSK analysis/decoder modules;
+- IF noise reduction and EiBi frequency-information modules;
+- external decoder integration in the Radio module;
+- tuner, waterfall, theme, source-menu, audio-source, and PortAudio refinements.
+
+The decoder dependencies are pinned and documented in
+[`third_party/README.md`](third_party/README.md). This is a development build,
+not an official SDR++ release. General SDR++ documentation follows below.
+
+---
+
 # SDR++, The bloat-free SDR software<br>
 
 ![Screenshot](https://i.imgur.com/Ter2MQJ.png)

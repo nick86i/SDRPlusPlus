@@ -1,0 +1,191 @@
+diff --git a/src/DataIO.cpp b/src/DataIO.cpp
+index 4472c22..49b03f4 100644
+--- a/src/DataIO.cpp
++++ b/src/DataIO.cpp
+@@ -323,6 +323,20 @@ void CWriteData::ProcessDataInternal(CParameter& Parameters)
+             vecsTmpAudData[i] = 0;
+     }
+ 
++#ifdef DREAM_EMBEDDED
++    // Dream's reverb error concealment can repeat the last good fragment.
++    // In an SDR++ stream silence is less distracting and makes reception
++    // failures explicit, so never publish a failed MSC audio frame.
++    Parameters.Lock();
++    const bool decodedAudioOk = Parameters.ReceiveStatus.SLAudio.GetStatus() == RX_OK;
++    Parameters.Unlock();
++    if (!decodedAudioOk)
++    {
++        for (i = 0; i < iInputBlockSize; ++i)
++            vecsTmpAudData[i] = 0;
++    }
++#endif
++
+     /* Put data to sound card interface. Show sound card state on GUI */
+ 
+ #ifdef QT_MULTIMEDIA_LIB
+@@ -346,7 +360,10 @@ void CWriteData::ProcessDataInternal(CParameter& Parameters)
+         bBad = false;
+     }
+ #else
+-    const bool bBad = pSound->Write(vecsTmpAudData);
++    // Embedded receivers can consume decoded audio through their host rather
++    // than a Dream sound device. Do not dereference a null output interface
++    // when the first DRM audio service becomes active.
++    const bool bBad = pSound != nullptr ? pSound->Write(vecsTmpAudData) : false;
+ #endif
+     Parameters.Lock();
+     Parameters.ReceiveStatus.InterfaceO.SetStatus(bBad ? DATA_ERROR : RX_OK); /* Yellow light */
+diff --git a/src/DataIO.h b/src/DataIO.h
+index 4258e2a..1f6a64e 100644
+--- a/src/DataIO.h
++++ b/src/DataIO.h
+@@ -136,6 +136,13 @@ public:
+         return eOutChanSel;
+     }
+     void SetSoundInterface(std::string);
++    // The caller owns an injected output interface.
++    void SetOutputInterface(CSoundOutInterface* output) {
++        if (pSound != nullptr) pSound->Close();
++        pSound = output;
++        soundDevice = output ? "Embedded audio output" : "";
++        SetInitFlag();
++    }
+     std::string GetSoundInterface() {
+         return soundDevice;
+     }
+diff --git a/src/DrmReceiver.h b/src/DrmReceiver.h
+index 35fa286..a8063ff 100644
+--- a/src/DrmReceiver.h
++++ b/src/DrmReceiver.h
+@@ -151,7 +151,13 @@ public:
+     virtual void EnumerateInputs(std::vector<string>& names, std::vector<string>& descriptions, std::string& defaultInput) override;
+     virtual void EnumerateOutputs(std::vector<string>& names, std::vector<string>& descriptions, std::string& defaultOutput) override;
+     virtual void SetInputDevice(std::string) override;
++    void SetInputInterface(CSoundInInterface* input) {
++        ReceiveData.SetInputInterface(input);
++    }
+     virtual void SetOutputDevice(std::string) override;
++    void SetOutputInterface(CSoundOutInterface* output) {
++        WriteData.SetOutputInterface(output);
++    }
+ 
+     virtual CSettings*GetSettings()  override{
+         return pSettings;
+diff --git a/src/creceivedata.cpp b/src/creceivedata.cpp
+index 40fb4fc..afcaaf0 100644
+--- a/src/creceivedata.cpp
++++ b/src/creceivedata.cpp
+@@ -57,13 +57,28 @@ CReceiveData::CReceiveData() :
+     pAudioInput(nullptr),
+     pIODevice(nullptr),
+ #endif
+-    pSound(nullptr),
++    pSound(nullptr), ownsSoundInterface(false),
+     vecrInpData(INPUT_DATA_VECTOR_SIZE, 0.0),
+     bFippedSpectrum(false), eInChanSelection(CS_MIX_CHAN), iPhase(0),spectrumAnalyser()
+ {}
+ 
+ CReceiveData::~CReceiveData()
+ {
++    if (pSound != nullptr && ownsSoundInterface) {
++        delete pSound;
++    }
++}
++
++void CReceiveData::SetInputInterface(CSoundInInterface* input)
++{
++    if (pSound != nullptr) {
++        pSound->Close();
++        if (ownsSoundInterface) delete pSound;
++    }
++    pSound = input;
++    ownsSoundInterface = false;
++    soundDevice = input ? "SDR++ IQ stream" : "";
++    SetInitFlag();
+ }
+ 
+ void CReceiveData::Stop()
+@@ -123,8 +138,9 @@ CReceiveData::SetSoundInterface(string device)
+ 
+     if(pSound != nullptr) {
+         pSound->Close();
+-        delete pSound;
++        if (ownsSoundInterface) delete pSound;
+         pSound = nullptr;
++        ownsSoundInterface = false;
+     }
+     if(FileTyper::resolve(device) != FileTyper::unrecognised) {
+         CAudioFileIn* pAudioFileIn = new CAudioFileIn();
+@@ -136,6 +152,7 @@ CReceiveData::SetSoundInterface(string device)
+             iSampleRate = sr;
+         }
+         pSound = pAudioFileIn;
++        ownsSoundInterface = true;
+ #ifdef QT_MULTIMEDIA_LIB
+         if(pIODevice!=nullptr) {
+             pIODevice->close();
+@@ -171,6 +188,7 @@ CReceiveData::SetSoundInterface(string device)
+         }
+ #else
+         pSound = new CSoundIn();
++        ownsSoundInterface = true;
+         pSound->SetDev(device);
+ #endif
+     }
+diff --git a/src/creceivedata.h b/src/creceivedata.h
+index d566b91..2c4e432 100644
+--- a/src/creceivedata.h
++++ b/src/creceivedata.h
+@@ -92,6 +92,9 @@ public:
+     }
+ 
+     void SetSoundInterface(std::string);
++    // Embedders (for example SDR++ modules) can supply a live IQ source.
++    // CReceiveData does not own an injected interface.
++    void SetInputInterface(CSoundInInterface* input);
+     std::string GetSoundInterface() { return soundDevice; }
+     void Enumerate(std::vector<string>& names, std::vector<string>& descriptions, std::string& defaultInput);
+     void Stop();
+@@ -121,6 +124,7 @@ protected:
+     mutable QMutex          audioDeviceMutex;  // Protect audio device pointers
+ #endif
+     CSoundInInterface*		pSound;
++    bool                    ownsSoundInterface;
+     CVector<_SAMPLE>		vecsSoundBuffer;
+     std::string             soundDevice;
+ 
+diff --git a/src/sound/sound.h b/src/sound/sound.h
+index 34b7443..57049aa 100644
+--- a/src/sound/sound.h
++++ b/src/sound/sound.h
+@@ -29,7 +29,7 @@
+ #ifndef _SOUND_H
+ #define _SOUND_H
+ 
+-#if defined(WIN32) && !defined(USE_PORTAUDIO) && !defined(USE_JACK) && !defined(QT_MULTIMEDIA_LIB)
++#if defined(WIN32) && !defined(DREAM_EMBEDDED) && !defined(USE_PORTAUDIO) && !defined(USE_JACK) && !defined(QT_MULTIMEDIA_LIB)
+ /* mmsystem sound interface */
+ # include "../windows/Sound.h"
+ #else
+diff --git a/src/sourcedecoders/aac_codec.cpp b/src/sourcedecoders/aac_codec.cpp
+index 018a440..155f107 100644
+--- a/src/sourcedecoders/aac_codec.cpp
++++ b/src/sourcedecoders/aac_codec.cpp
+@@ -46,7 +46,7 @@ static const LIBFUNC FaadLibFuncs[] = {
+     { nullptr, nullptr, nullptr }
+ };
+ # if defined(_WIN32)
+-static const char* FaadLibNames[] = { "faad2_drm.dll", "libfaad2_drm.dll", "faad_drm.dll", "libfaad2.dll", nullptr };
++static const char* FaadLibNames[] = { "faad2_drm.dll", "libfaad2_drm.dll", "faad_drm.dll", "faad_drm-2.dll", "libfaad2.dll", nullptr };
+ # elif defined(__APPLE__)
+ static const char* FaadLibNames[] = { "libfaad_drm.dylib", nullptr };
+ # else
+@@ -212,7 +212,7 @@ AacCodec::DecOpen(const CAudioParam& AudioParam, int& iAudioSampleRate)
+ CAudioCodec::EDecError
+ AacCodec::Decode(const vector<uint8_t>& audio_frame, uint8_t aac_crc_bits, CVector<_REAL>& left, CVector<_REAL>& right)
+ {
+-    EDecError eDecError;
++    EDecError eDecError = DECODER_ERROR_OK;
+     bool bCurBlockOK = true;
+     _SAMPLE* psDecOutSampleBuf = nullptr;
+     NeAACDecFrameInfo DecFrameInfo;
