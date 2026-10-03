@@ -1,33 +1,113 @@
-# SDR++ Decoder and Pluto+ Development Fork
+# SDR++ Enhanced
 
-This repository is an experimental SDR++ development fork focused on improved
-Pluto/Pluto+ reception and additional digital-signal decoders. It is based on
-the official SDR++ project and retains its Git history so upstream changes can
+[![Enhanced Windows CI](https://github.com/nick86i/SDRPlusPlus/actions/workflows/enhanced_windows.yml/badge.svg?branch=sdrpp-enhanced)](https://github.com/nick86i/SDRPlusPlus/actions/workflows/enhanced_windows.yml)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](license)
+
+SDR++ Enhanced is an experimental development fork focused on improved
+Pluto/Pluto+ reception, digital-signal decoding, and practical Windows fixes.
+It retains the official SDR++ Git history so upstream changes can continue to
 be reviewed and merged.
 
-Major additions currently include:
+> **Unofficial development build:** this project is not an official SDR++
+> release. For the original project, visit
+> [AlexandreRouma/SDRPlusPlus](https://github.com/AlexandreRouma/SDRPlusPlus).
 
-- an enhanced PlutoSDR/Pluto+ source with diagnostics, overflow handling,
-  receive-buffer controls, gain fixes, decimation, and startup improvements;
-- DRM30 decoding with audio, service information, text, and MOT slideshow data;
-- DMR Tier II decoding with voice support and expanded data-packet diagnostics;
-- DVB-T2, Morse, and wide-shift FSK analysis/decoder modules;
-- IF noise reduction and EiBi frequency-information modules;
-- external decoder integration in the Radio module;
-- tuner, waterfall, theme, source-menu, audio-source, and PortAudio refinements.
+## What this fork adds
 
-The decoder dependencies are pinned and documented in
-[`third_party/README.md`](third_party/README.md). This is a development build,
-not an official SDR++ release. General SDR++ documentation follows below.
+| Area | Highlights |
+| --- | --- |
+| PlutoSDR / Pluto+ | Detailed latency and overflow diagnostics, configurable receive buffers, gain fixes, decimation, startup improvements, and higher-priority receive processing |
+| DRM | DRM30 audio, service information, text messages, MOT slideshow data, and stale-audio suppression during reacquisition or CRC loss |
+| DMR | Tier II voice decoding through DSDcc/mbelib plus expanded CSBK, D12 and packet-data diagnostics |
+| Other decoders | DVB-T2 analysis, adaptive Morse/CW decoding, and a wide-shift FSK analyzer |
+| Signal and frequency tools | Adjustable IF noise reduction and EiBi tuned-frequency schedule information |
+| SDR++ integration | External decoder modes in Radio and refinements to tuning, waterfall, themes, source selection, audio input, and PortAudio output |
+
+The external decoder sources are downloaded at pinned revisions and patched
+reproducibly during a clean build. Exact revisions, licenses, and patch details
+are documented in [`third_party/README.md`](third_party/README.md).
+
+## Screenshot
+
+The fork retains the familiar SDR++ interface while adding its decoders and
+diagnostics as native modules in the left-side menu.
+
+![SDR++ interface](https://i.imgur.com/Ter2MQJ.png)
+
+## Windows builds
+
+Every push and pull request to `sdrpp-enhanced` runs the focused
+[Enhanced Windows CI workflow](https://github.com/nick86i/SDRPlusPlus/actions/workflows/enhanced_windows.yml).
+It builds the enhanced Pluto+, audio, DRM, DMR, Morse, DVB-T2, IF-noise and
+EiBi configuration from a clean checkout.
+
+Successful workflow runs contain a temporary `sdrpp-enhanced-windows-x64`
+artifact. This artifact is intended for CI verification and advanced testing;
+it is **not yet a complete installer or release package**. A normal user-facing
+archive will be published on the Releases page after the first versioned build.
+
+### Build locally on Windows
+
+Install these prerequisites first:
+
+- Visual Studio 2022 with **Desktop development with C++**;
+- [CMake](https://cmake.org/) and [Git](https://git-scm.com/);
+- [vcpkg](https://vcpkg.io/);
+- [PothosSDR](https://github.com/pothosware/PothosSDR) in
+  `C:/Program Files/PothosSDR`;
+- RtAudio installed where CMake can find it (the upstream Windows convention is
+  `C:/Program Files (x86)/RtAudio`).
+
+Install the required x64 libraries from your vcpkg directory:
+
+```powershell
+.\vcpkg install fftw3:x64-windows glfw3:x64-windows zstd:x64-windows `
+  zlib:x64-windows libusb:x64-windows spdlog:x64-windows `
+  fdk-aac:x64-windows speexdsp:x64-windows portaudio:x64-windows
+```
+
+Clone and configure the enhanced branch, replacing `<vcpkg>` with your vcpkg
+directory:
+
+```powershell
+git clone --branch sdrpp-enhanced https://github.com/nick86i/SDRPlusPlus.git
+cd SDRPlusPlus
+
+cmake -S . -B build-enhanced -G "Visual Studio 17 2022" `
+  "-DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake" `
+  "-DCMAKE_POLICY_VERSION_MINIMUM=3.5" `
+  -DOPT_BUILD_DRM_DECODER=ON `
+  -DOPT_BUILD_DMR_DECODER=ON `
+  -DOPT_BUILD_MORSE_DECODER=ON `
+  -DOPT_BUILD_DVBT2_DECODER=ON `
+  -DOPT_BUILD_PLUTOSDR_SOURCE=ON `
+  -DOPT_BUILD_AUDIO_SOURCE=ON `
+  -DOPT_BUILD_AUDIO_SINK=ON `
+  -DOPT_BUILD_IF_NOISE_REDUCTION=ON `
+  -DOPT_BUILD_EIBI_FREQUENCY_INFO=ON
+
+cmake --build build-enhanced --config Release --parallel
+```
+
+Dream, DSDcc, mbelib, and the DVB-T2 reference source are fetched
+automatically at their pinned revisions; sibling dependency checkouts are not
+required. See the upstream **Running for development** section below for the
+`root_dev` layout and module-loading configuration.
+
+## Project branches
+
+- `sdrpp-enhanced` is the default development branch and contains all enhanced
+  modules and fixes.
+- `master` tracks the official SDR++ baseline and is retained for upstream
+  synchronization.
+
+General SDR++ documentation follows below.
 
 ---
 
-# SDR++, The bloat-free SDR software<br>
+# Upstream SDR++ documentation
 
-![Screenshot](https://i.imgur.com/Ter2MQJ.png)
 SDR++ is a cross-platform and open source SDR software with the aim of being bloat free and simple to use.
-
-![Build](https://github.com/AlexandreRouma/SDRPlusPlus/workflows/Build%20Binaries/badge.svg)
 
 * [Patreon](https://patreon.com/ryzerth)
 * [Discord Server](https://discord.gg/aFgWjyD)

@@ -5,9 +5,13 @@ on:
   push:
     branches:
       - sdrpp-enhanced
+    paths-ignore:
+      - "**/*.md"
   pull_request:
     branches:
       - sdrpp-enhanced
+    paths-ignore:
+      - "**/*.md"
 
 permissions:
   contents: read
